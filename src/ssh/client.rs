@@ -1,22 +1,36 @@
 use std::sync::Arc;
 
 use color_eyre::eyre::Result;
-use russh::client;
+use russh::Channel;
+use russh::client::{self, ChannelOpenHandle, Msg, Session};
 use russh::keys::PublicKeyOrCertificate;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::config::schema::TunnelDefinition;
+use crate::config::schema::{Direction, HostPort, TunnelDefinition};
 
 use super::auth;
 
 pub struct Client {
     tunnel_id: Uuid,
+    /// Set only for Remote-direction tunnels: where to proxy each inbound
+    /// `forwarded-tcpip` channel the server opens on us.
+    remote_forward_target: Option<HostPort>,
 }
 
 impl Client {
     pub fn new(tunnel_id: Uuid) -> Self {
-        Self { tunnel_id }
+        Self {
+            tunnel_id,
+            remote_forward_target: None,
+        }
+    }
+
+    pub fn with_remote_forward_target(tunnel_id: Uuid, target: HostPort) -> Self {
+        Self {
+            tunnel_id,
+            remote_forward_target: Some(target),
+        }
     }
 }
 
@@ -36,6 +50,36 @@ impl client::Handler for Client {
         );
         Ok(true)
     }
+
+    /// Only ever fires for a Remote-direction tunnel's target session,
+    /// since only those call `tcpip_forward`. Accepts every inbound
+    /// forwarded connection and hands it off to a background task that
+    /// proxies it to `remote_forward_target`.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
+
+        let tunnel_id = self.tunnel_id;
+        if let Some(target) = self.remote_forward_target.clone() {
+            tokio::spawn(async move {
+                if let Err(err) =
+                    super::remote_forward::proxy_forwarded_channel(channel, target).await
+                {
+                    warn!(tunnel_id = %tunnel_id, ?err, "remote-forward connection proxy failed");
+                }
+            });
+        }
+
+        Ok(())
+    }
 }
 
 /// An authenticated session to a tunnel's target host, transparently hopping
@@ -54,14 +98,20 @@ pub async fn connect(tunnel_id: Uuid, def: &TunnelDefinition) -> Result<Connecti
         ..Default::default()
     });
 
+    let target_client = match def.direction {
+        Direction::Remote => {
+            let target = def.remote.clone().expect(
+                "Remote direction always has a local forward target (form/config validated this)",
+            );
+            Client::with_remote_forward_target(tunnel_id, target)
+        }
+        Direction::Local | Direction::Dynamic => Client::new(tunnel_id),
+    };
+
     let connection = match &def.jump {
         None => {
-            let mut handle = client::connect(
-                config,
-                (def.host.as_str(), def.port),
-                Client::new(tunnel_id),
-            )
-            .await?;
+            let mut handle =
+                client::connect(config, (def.host.as_str(), def.port), target_client).await?;
             auth::authenticate(&mut handle, &def.username, &def.auth).await?;
             Connection {
                 target: handle,
@@ -69,8 +119,15 @@ pub async fn connect(tunnel_id: Uuid, def: &TunnelDefinition) -> Result<Connecti
             }
         }
         Some(jump) => {
-            let (jump_handle, mut target_handle) =
-                super::jump::connect_through(tunnel_id, jump, &def.host, def.port, config).await?;
+            let (jump_handle, mut target_handle) = super::jump::connect_through(
+                tunnel_id,
+                jump,
+                &def.host,
+                def.port,
+                config,
+                target_client,
+            )
+            .await?;
             auth::authenticate(&mut target_handle, &def.username, &def.auth).await?;
             Connection {
                 target: target_handle,

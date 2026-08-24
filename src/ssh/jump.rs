@@ -21,6 +21,7 @@ pub async fn connect_through(
     target_host: &str,
     target_port: u16,
     config: Arc<client::Config>,
+    target_client: Client,
 ) -> Result<(client::Handle<Client>, client::Handle<Client>)> {
     let mut jump_handle = client::connect(
         Arc::clone(&config),
@@ -35,7 +36,7 @@ pub async fn connect_through(
         .await?;
     let stream = channel.into_stream();
 
-    let target_handle = client::connect_stream(config, stream, Client::new(tunnel_id)).await?;
+    let target_handle = client::connect_stream(config, stream, target_client).await?;
 
     Ok((jump_handle, target_handle))
 }

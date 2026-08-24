@@ -1,7 +1,9 @@
 pub mod auth;
 pub mod client;
+pub mod dynamic_forward;
 pub mod jump;
 pub mod local_forward;
+pub mod remote_forward;
 
 use std::sync::Arc;
 
@@ -74,10 +76,8 @@ async fn run_tunnel_task(
                     );
                     local_forward::run(target, &def.local_bind, &remote, stop_rx).await
                 }
-                Direction::Remote | Direction::Dynamic => Err(color_eyre::eyre::eyre!(
-                    "{:?} forwarding is not implemented yet",
-                    def.direction
-                )),
+                Direction::Remote => remote_forward::run(target, &def.local_bind, stop_rx).await,
+                Direction::Dynamic => dynamic_forward::run(target, &def.local_bind, stop_rx).await,
             }
         }
     });
