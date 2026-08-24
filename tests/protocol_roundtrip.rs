@@ -1,5 +1,7 @@
 use pmanager::config::schema::{AuthMethod, Direction, SocketAddrSpec, TunnelDefinition};
-use pmanager::ipc::protocol::{ClientMessage, ClientRequest, DaemonMessage, ResponsePayload, TunnelSnapshot};
+use pmanager::ipc::protocol::{
+    ClientMessage, ClientRequest, DaemonMessage, ResponsePayload, TunnelSnapshot,
+};
 use pmanager::model::TunnelState;
 use uuid::Uuid;
 
@@ -48,7 +50,9 @@ fn daemon_response_with_tunnel_list_round_trips() {
     let json = serde_json::to_string(&msg).unwrap();
     let decoded: DaemonMessage = serde_json::from_str(&json).unwrap();
 
-    let DaemonMessage::Response { request_id, result } = decoded;
+    let DaemonMessage::Response { request_id, result } = decoded else {
+        panic!("expected a Response message");
+    };
     assert_eq!(request_id, 7);
     let ResponsePayload::Tunnels(tunnels) = result.unwrap() else {
         panic!("expected Tunnels payload");
@@ -57,7 +61,9 @@ fn daemon_response_with_tunnel_list_round_trips() {
     assert_eq!(tunnels[0].def.name, "example");
     assert!(matches!(
         tunnels[0].state,
-        TunnelState::Connected { active_connections: 2 }
+        TunnelState::Connected {
+            active_connections: 2
+        }
     ));
 }
 
@@ -70,6 +76,8 @@ fn error_response_round_trips() {
     let json = serde_json::to_string(&msg).unwrap();
     let decoded: DaemonMessage = serde_json::from_str(&json).unwrap();
 
-    let DaemonMessage::Response { result, .. } = decoded;
+    let DaemonMessage::Response { result, .. } = decoded else {
+        panic!("expected a Response message");
+    };
     assert_eq!(result.unwrap_err(), "something went wrong");
 }

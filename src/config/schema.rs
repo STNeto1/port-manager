@@ -40,8 +40,13 @@ pub enum Direction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthMethod {
-    Password { password: Option<String> },
-    PrivateKey { path: PathBuf, passphrase: Option<String> },
+    Password {
+        password: Option<String>,
+    },
+    PrivateKey {
+        path: PathBuf,
+        passphrase: Option<String>,
+    },
     Agent,
 }
 

@@ -3,7 +3,11 @@ use pmanager::config::schema::{
 };
 use uuid::Uuid;
 
-fn sample_tunnel(direction: Direction, auth: AuthMethod, jump: Option<JumpHost>) -> TunnelDefinition {
+fn sample_tunnel(
+    direction: Direction,
+    auth: AuthMethod,
+    jump: Option<JumpHost>,
+) -> TunnelDefinition {
     TunnelDefinition {
         id: Uuid::new_v4(),
         name: "example".to_string(),
@@ -97,6 +101,5 @@ fn load_rejects_malformed_toml() {
 }
 
 fn tempfile_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pmanager-test-{}", Uuid::new_v4()));
-    dir
+    std::env::temp_dir().join(format!("pmanager-test-{}", Uuid::new_v4()))
 }

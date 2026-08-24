@@ -1,15 +1,20 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders, Cell, Row, Table},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Cell, Row, Table, TableState},
 };
 
 use crate::config::schema::Direction;
 use crate::ipc::protocol::TunnelSnapshot;
 use crate::model::TunnelState;
 
-pub fn draw(frame: &mut Frame, area: Rect, tunnels: &[TunnelSnapshot]) {
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    tunnels: &[TunnelSnapshot],
+    table_state: &mut TableState,
+) {
     let rows = tunnels.iter().map(|snapshot| {
         let direction = match snapshot.def.direction {
             Direction::Local => "L",
@@ -45,9 +50,10 @@ pub fn draw(frame: &mut Frame, area: Rect, tunnels: &[TunnelSnapshot]) {
 
     let table = Table::new(rows, widths)
         .header(Row::new(vec!["Name", "Type", "Local <-> Remote", "Status"]))
-        .block(Block::default().borders(Borders::ALL).title("Tunnels"));
+        .block(Block::default().borders(Borders::ALL).title("Tunnels"))
+        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
 
-    frame.render_widget(table, area);
+    frame.render_stateful_widget(table, area, table_state);
 }
 
 fn status_style(state: &TunnelState) -> (String, Color) {
