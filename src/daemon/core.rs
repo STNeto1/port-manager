@@ -7,7 +7,8 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::config::schema::TunnelDefinition;
+use crate::config::resolve;
+use crate::config::schema::{Profile, TunnelDefinition};
 use crate::config::{self, Config};
 use crate::ipc::protocol::TunnelSnapshot;
 use crate::model::{TunnelEvent, TunnelState};
@@ -21,6 +22,7 @@ type CommandReply = oneshot::Sender<Result<(), String>>;
 /// regardless of how many clients or in-flight ssh tasks are involved.
 pub enum DaemonCommand {
     ListTunnels(oneshot::Sender<Vec<TunnelSnapshot>>),
+    ListProfiles(oneshot::Sender<Vec<Profile>>),
     AddTunnel(TunnelDefinition, CommandReply),
     UpdateTunnel(TunnelDefinition, CommandReply),
     RemoveTunnel(Uuid, CommandReply),
@@ -41,6 +43,7 @@ struct TunnelRuntime {
 
 pub struct DaemonCore {
     config_path: PathBuf,
+    profiles: Vec<Profile>,
     tunnels: HashMap<Uuid, TunnelRuntime>,
     events: broadcast::Sender<TunnelEvent>,
     /// Cloned into per-tunnel event-forwarding tasks so an ssh task's
@@ -57,8 +60,10 @@ impl DaemonCore {
         events: broadcast::Sender<TunnelEvent>,
         self_cmd_tx: mpsc::Sender<DaemonCommand>,
     ) -> Self {
+        let profiles = config.profiles.clone();
         Self {
             config_path,
+            profiles,
             tunnels: index_by_id(config),
             events,
             self_cmd_tx,
@@ -67,6 +72,7 @@ impl DaemonCore {
 
     fn persist(&self) -> Result<(), String> {
         let config = Config {
+            profiles: self.profiles.clone(),
             tunnels: self.tunnels.values().map(|t| t.def.clone()).collect(),
         };
         config::save(&self.config_path, &config).map_err(|err| err.to_string())
@@ -109,13 +115,14 @@ impl DaemonCore {
             return Err("tunnel not found".to_string());
         };
         let def = runtime.def.clone();
+        let conn = resolve::resolve_connection(&self.profiles, &def.profile)?;
 
         // Starting an already-running tunnel restarts it cleanly rather
         // than leaking the old task or binding the same local port twice.
         self.stop_running(id);
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let handle = ssh::spawn_tunnel(def, event_tx);
+        let handle = ssh::spawn_tunnel(def, conn, event_tx);
 
         let forward_cmd_tx = self.self_cmd_tx.clone();
         tokio::spawn(async move {
@@ -176,6 +183,9 @@ pub async fn run(
             DaemonCommand::ListTunnels(reply) => {
                 let _ = reply.send(core.snapshot_all());
             }
+            DaemonCommand::ListProfiles(reply) => {
+                let _ = reply.send(core.profiles.clone());
+            }
             DaemonCommand::AddTunnel(def, reply) => {
                 let id = def.id;
                 core.tunnels.insert(
@@ -226,6 +236,7 @@ pub async fn run(
                     for id in core.tunnels.keys().copied().collect::<Vec<_>>() {
                         core.stop_running(id);
                     }
+                    core.profiles = config.profiles.clone();
                     core.tunnels = index_by_id(config);
                     info!("config reloaded from disk");
                     let _ = reply.send(Ok(()));

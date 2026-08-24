@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::config::schema::TunnelDefinition;
+use crate::config::schema::{Profile, TunnelDefinition};
 use crate::model::{TunnelEvent, TunnelState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +14,7 @@ pub struct ClientMessage {
 pub enum ClientRequest {
     Ping,
     ListTunnels,
+    ListProfiles,
     AddTunnel(TunnelDefinition),
     UpdateTunnel(TunnelDefinition),
     RemoveTunnel(Uuid),
@@ -39,6 +40,7 @@ pub enum DaemonMessage {
 pub enum ResponsePayload {
     Ack,
     Tunnels(Vec<TunnelSnapshot>),
+    Profiles(Vec<Profile>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

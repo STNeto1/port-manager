@@ -4,7 +4,7 @@ use color_eyre::eyre::Result;
 use russh::client;
 use uuid::Uuid;
 
-use crate::config::schema::JumpHost;
+use crate::config::resolve::ResolvedJump;
 
 use super::auth;
 use super::client::Client;
@@ -17,7 +17,7 @@ use super::client::Client;
 /// long as the target handle is in use.
 pub async fn connect_through(
     tunnel_id: Uuid,
-    jump: &JumpHost,
+    jump: &ResolvedJump,
     target_host: &str,
     target_port: u16,
     config: Arc<client::Config>,

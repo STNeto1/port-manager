@@ -23,7 +23,7 @@ pub async fn run() -> Result<()> {
 
     if let Some(client) = client.as_mut() {
         app.daemon_connected = true;
-        refresh_tunnels(&mut app, client).await;
+        refresh_state(&mut app, client).await;
     }
 
     let mut terminal = tui::init()?;
@@ -93,7 +93,7 @@ async fn apply_action(app: &mut App, client: &mut DaemonClient, action: Action) 
     match action {
         Action::None => {}
         Action::Quit => app.should_quit = true,
-        Action::OpenAddForm => app.mode = Mode::Form(Box::new(FormState::new_add())),
+        Action::OpenAddForm => app.mode = Mode::Form(Box::new(FormState::new_add(&app.profiles))),
         Action::OpenEditForm => {
             if let Some(def) = app.selected_snapshot().map(|s| s.def.clone()) {
                 app.mode = Mode::Form(Box::new(FormState::from_definition(&def)));
@@ -110,7 +110,7 @@ async fn apply_action(app: &mut App, client: &mut DaemonClient, action: Action) 
         Action::ToggleStartStop => toggle_start_stop(app, client).await,
         Action::Reload => {
             let _ = client.call(ClientRequest::ReloadConfig).await;
-            refresh_tunnels(app, client).await;
+            refresh_state(app, client).await;
         }
     }
 }
@@ -129,7 +129,7 @@ async fn submit_form(app: &mut App, client: &mut DaemonClient) {
             };
             match client.call(request).await {
                 Ok(_) => {
-                    refresh_tunnels(app, client).await;
+                    refresh_state(app, client).await;
                     app.mode = Mode::List;
                 }
                 Err(err) => set_form_error(app, err.to_string()),
@@ -151,7 +151,7 @@ async fn confirm_delete(app: &mut App, client: &mut DaemonClient) {
     };
     let id = *id;
     let _ = client.call(ClientRequest::RemoveTunnel(id)).await;
-    refresh_tunnels(app, client).await;
+    refresh_state(app, client).await;
     app.mode = Mode::List;
 }
 
@@ -167,7 +167,7 @@ async fn toggle_start_stop(app: &mut App, client: &mut DaemonClient) {
     let _ = client.call(request).await;
 }
 
-async fn refresh_tunnels(app: &mut App, client: &mut DaemonClient) {
+async fn refresh_state(app: &mut App, client: &mut DaemonClient) {
     if let Ok(ResponsePayload::Tunnels(tunnels)) = client.call(ClientRequest::ListTunnels).await {
         app.tunnels = tunnels;
         match app.table_state.selected() {
@@ -181,5 +181,9 @@ async fn refresh_tunnels(app: &mut App, client: &mut DaemonClient) {
             None if !app.tunnels.is_empty() => app.table_state.select(Some(0)),
             _ => {}
         }
+    }
+    if let Ok(ResponsePayload::Profiles(profiles)) = client.call(ClientRequest::ListProfiles).await
+    {
+        app.profiles = profiles;
     }
 }

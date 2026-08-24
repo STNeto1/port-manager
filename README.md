@@ -56,32 +56,36 @@ The daemon logs to stdout. When auto-spawned it's redirected to `~/.config/pmana
 
 ## Config file
 
-`~/.config/pmanager/config.toml`, created automatically on first run and safe to hand-edit (`r` in the TUI reloads it). Each `[[tunnels]]` entry:
+`~/.config/pmanager/config.toml`, created automatically on first run and safe to hand-edit (`r` in the TUI reloads it). It has two parts: a list of **profiles** (reusable SSH connections — host/port/username/auth, optionally through a jump host) and a list of **tunnels** that each reference one profile by name, the same way an ssh_config `Host` block covers every `LocalForward` line under it. Any number of tunnels can share a profile instead of repeating its connection details.
 
 ```toml
-[[tunnels]]
-id = "9d2e7f10-...."          # UUID, assigned automatically — don't reuse across entries
-name = "worker-dev-server"
-direction = "local"            # "local" | "remote" | "dynamic"
-host = "10.233.1.2"
+[[profiles]]
+name = "nixserver"
+host = "192.168.1.50"
 port = 22
 username = "germano"
-enabled = true
-autostart = false               # start automatically when the daemon launches
-
-[tunnels.auth]
+[profiles.auth]
 type = "private_key"            # "password" | "private_key" | "agent"
 path = "/Users/me/.ssh/id_ed25519"
 passphrase = ""                  # omit or leave blank if the key isn't encrypted
 
-# Optional: reach `host` through a bastion (ProxyJump). Single hop only.
-[tunnels.jump]
-host = "192.168.1.50"
+[[profiles]]
+name = "worker"
+host = "10.233.1.2"
 port = 22
 username = "germano"
-[tunnels.jump.auth]
+jump = "nixserver"                # reach `worker` through the `nixserver` profile. Single hop only.
+[profiles.auth]
 type = "private_key"
 path = "/Users/me/.ssh/id_ed25519"
+
+[[tunnels]]
+id = "9d2e7f10-...."          # UUID, assigned automatically — don't reuse across entries
+name = "worker-dev-server"
+direction = "local"            # "local" | "remote" | "dynamic"
+profile = "worker"              # references a [[profiles]] entry by name
+enabled = true
+autostart = false               # start automatically when the daemon launches
 
 [tunnels.local_bind]            # where pmanager listens locally
 bind_addr = "127.0.0.1"
@@ -93,11 +97,13 @@ port = 1337
 ```
 
 `[tunnels.remote]`'s meaning depends on `direction`:
-- **local**: the address `host` connects to *on the far side* of the SSH session (classic `ssh -L local_bind:remote`).
+- **local**: the address `profile.host` connects to *on the far side* of the SSH session (classic `ssh -L local_bind:remote`).
 - **remote**: the address the daemon connects to *locally* when the server forwards a connection back (classic `ssh -R remote_bind:this_field`, with `local_bind` acting as the server-side bind address/port).
 - **dynamic**: not used — SOCKS clients supply their own target per-connection.
 
-**Auth methods**: `agent` (recommended — talks to `ssh-agent` via `$SSH_AUTH_SOCK`, no secrets in the config file), `private_key` (path + optional passphrase — a plaintext passphrase in `config.toml` is a real risk if the key needs one), and `password` (plaintext password in `config.toml` — avoid unless you understand that tradeoff; the add/edit form doesn't warn on this yet).
+**Auth methods** (set per-profile): `agent` (recommended — talks to `ssh-agent` via `$SSH_AUTH_SOCK`, no secrets in the config file), `private_key` (path + optional passphrase — a plaintext passphrase in `config.toml` is a real risk if the key needs one), and `password` (plaintext password in `config.toml` — avoid unless you understand that tradeoff; the add/edit form doesn't warn on this yet).
+
+The add/edit form lets you pick from existing profiles (left/right on the Profile field) but doesn't create or edit profiles itself yet — add those under `[[profiles]]` by hand first.
 
 ## Host key verification
 
@@ -105,7 +111,7 @@ Server host keys are checked against your normal `~/.ssh/known_hosts` — the sa
 
 ## Known limitations
 
-- ProxyJump supports a single hop, not a chain of jump hosts.
-- The add/edit form doesn't yet expose jump-host fields — set those by hand-editing `config.toml`.
+- ProxyJump supports a single hop, not a chain of jump hosts — a profile's `jump` must point at a profile with no `jump` of its own.
+- Profiles aren't creatable or editable from the TUI yet — add/edit `[[profiles]]` by hand in `config.toml`.
 - No SSH certificate-based host verification.
 - Running the daemon persistently across reboots (e.g. via launchd or systemd) isn't automated — write your own unit/plist invoking `pmanager daemon` if you want that.

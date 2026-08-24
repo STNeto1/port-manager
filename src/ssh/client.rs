@@ -7,6 +7,7 @@ use russh::keys::PublicKeyOrCertificate;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::config::resolve::ResolvedConnection;
 use crate::config::schema::{Direction, HostPort, TunnelDefinition};
 
 use super::auth;
@@ -142,7 +143,7 @@ impl client::Handler for Client {
 }
 
 /// An authenticated session to a tunnel's target host, transparently hopping
-/// through `def.jump` first if set. When jumping, the jump host's own
+/// through `conn.jump` first if set. When jumping, the jump host's own
 /// session must be kept alive for as long as the target session is used —
 /// the channel it opened is what the target session's stream runs over —
 /// so both handles are held here rather than only returning the target one.
@@ -151,7 +152,11 @@ pub struct Connection {
     _jump_guard: Option<client::Handle<Client>>,
 }
 
-pub async fn connect(tunnel_id: Uuid, def: &TunnelDefinition) -> Result<Connection> {
+pub async fn connect(
+    tunnel_id: Uuid,
+    def: &TunnelDefinition,
+    conn: &ResolvedConnection,
+) -> Result<Connection> {
     let config = Arc::new(client::Config {
         nodelay: true,
         ..Default::default()
@@ -162,16 +167,16 @@ pub async fn connect(tunnel_id: Uuid, def: &TunnelDefinition) -> Result<Connecti
             let target = def.remote.clone().expect(
                 "Remote direction always has a local forward target (form/config validated this)",
             );
-            Client::with_remote_forward_target(tunnel_id, &def.host, def.port, target)
+            Client::with_remote_forward_target(tunnel_id, &conn.host, conn.port, target)
         }
-        Direction::Local | Direction::Dynamic => Client::new(tunnel_id, &def.host, def.port),
+        Direction::Local | Direction::Dynamic => Client::new(tunnel_id, &conn.host, conn.port),
     };
 
-    let connection = match &def.jump {
+    let connection = match &conn.jump {
         None => {
             let mut handle =
-                client::connect(config, (def.host.as_str(), def.port), target_client).await?;
-            auth::authenticate(&mut handle, &def.username, &def.auth).await?;
+                client::connect(config, (conn.host.as_str(), conn.port), target_client).await?;
+            auth::authenticate(&mut handle, &conn.username, &conn.auth).await?;
             Connection {
                 target: handle,
                 _jump_guard: None,
@@ -181,13 +186,13 @@ pub async fn connect(tunnel_id: Uuid, def: &TunnelDefinition) -> Result<Connecti
             let (jump_handle, mut target_handle) = super::jump::connect_through(
                 tunnel_id,
                 jump,
-                &def.host,
-                def.port,
+                &conn.host,
+                conn.port,
                 config,
                 target_client,
             )
             .await?;
-            auth::authenticate(&mut target_handle, &def.username, &def.auth).await?;
+            auth::authenticate(&mut target_handle, &conn.username, &conn.auth).await?;
             Connection {
                 target: target_handle,
                 _jump_guard: Some(jump_handle),

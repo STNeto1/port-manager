@@ -73,6 +73,14 @@ async fn dispatch(
                 .map_err(|_| "daemon core unavailable".to_string())?;
             Ok(ResponsePayload::Tunnels(tunnels))
         }
+        ClientRequest::ListProfiles => {
+            let (tx, rx) = oneshot::channel();
+            send_command(cmd_tx, DaemonCommand::ListProfiles(tx)).await?;
+            let profiles = rx
+                .await
+                .map_err(|_| "daemon core unavailable".to_string())?;
+            Ok(ResponsePayload::Profiles(profiles))
+        }
         ClientRequest::AddTunnel(def) => {
             simple_command(cmd_tx, |reply| DaemonCommand::AddTunnel(def, reply)).await
         }

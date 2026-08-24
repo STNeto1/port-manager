@@ -1,12 +1,8 @@
-use std::path::PathBuf;
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 use uuid::Uuid;
 
-use crate::config::schema::{
-    AuthMethod, Direction, HostPort, JumpHost, SocketAddrSpec, TunnelDefinition,
-};
+use crate::config::schema::{Direction, HostPort, Profile, SocketAddrSpec, TunnelDefinition};
 use crate::ipc::protocol::TunnelSnapshot;
 use crate::model::TunnelEvent;
 
@@ -14,6 +10,7 @@ pub struct App {
     pub should_quit: bool,
     pub daemon_connected: bool,
     pub tunnels: Vec<TunnelSnapshot>,
+    pub profiles: Vec<Profile>,
     pub table_state: TableState,
     pub mode: Mode,
 }
@@ -52,6 +49,7 @@ impl App {
             should_quit: false,
             daemon_connected: false,
             tunnels: Vec::new(),
+            profiles: Vec::new(),
             table_state: TableState::default(),
             mode: Mode::List,
         }
@@ -60,7 +58,7 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         match &mut self.mode {
             Mode::List => self.handle_list_key(key),
-            Mode::Form(form) => handle_form_key(form, key),
+            Mode::Form(form) => handle_form_key(form, key, &self.profiles),
             Mode::ConfirmDelete(_) => handle_confirm_key(key),
         }
     }
@@ -133,7 +131,7 @@ fn handle_confirm_key(key: KeyEvent) -> Action {
     }
 }
 
-fn handle_form_key(form: &mut FormState, key: KeyEvent) -> Action {
+fn handle_form_key(form: &mut FormState, key: KeyEvent, profiles: &[Profile]) -> Action {
     match key.code {
         KeyCode::Esc => Action::CancelForm,
         KeyCode::Enter => Action::SubmitForm,
@@ -148,7 +146,7 @@ fn handle_form_key(form: &mut FormState, key: KeyEvent) -> Action {
         KeyCode::Left => {
             match form.focused_field() {
                 FormField::Direction => form.cycle_direction(false),
-                FormField::AuthKind => form.cycle_auth_kind(false),
+                FormField::Profile => form.cycle_profile(false, profiles),
                 _ => {}
             }
             Action::None
@@ -156,7 +154,7 @@ fn handle_form_key(form: &mut FormState, key: KeyEvent) -> Action {
         KeyCode::Right => {
             match form.focused_field() {
                 FormField::Direction => form.cycle_direction(true),
-                FormField::AuthKind => form.cycle_auth_kind(true),
+                FormField::Profile => form.cycle_profile(true, profiles),
                 _ => {}
             }
             Action::None
@@ -178,23 +176,10 @@ fn handle_form_key(form: &mut FormState, key: KeyEvent) -> Action {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthKind {
-    Password,
-    PrivateKey,
-    Agent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormField {
     Name,
     Direction,
-    Host,
-    Port,
-    Username,
-    AuthKind,
-    Password,
-    KeyPath,
-    KeyPassphrase,
+    Profile,
     LocalBindAddr,
     LocalBindPort,
     RemoteHost,
@@ -206,79 +191,41 @@ pub struct FormState {
     pub focus_index: usize,
     pub name: String,
     pub direction: Direction,
-    pub host: String,
-    pub port: String,
-    pub username: String,
-    pub auth_kind: AuthKind,
-    pub password: String,
-    pub key_path: String,
-    pub key_passphrase: String,
+    /// Name of the selected `Profile` (host/port/username/auth/jump) this
+    /// tunnel connects through. Profiles themselves aren't editable here
+    /// yet — add one under `[[profiles]]` in config.toml first, then pick
+    /// it with left/right on this field.
+    pub profile_name: String,
     pub local_bind_addr: String,
     pub local_bind_port: String,
     pub remote_host: String,
     pub remote_port: String,
-    /// Not editable in this form yet (see `from_definition`); carried
-    /// through unchanged so editing a jump-host tunnel doesn't drop it.
-    jump: Option<JumpHost>,
     pub error: Option<String>,
 }
 
 impl FormState {
-    pub fn new_add() -> Self {
+    pub fn new_add(profiles: &[Profile]) -> Self {
         Self {
             editing_id: None,
             focus_index: 0,
             name: String::new(),
             direction: Direction::Local,
-            host: String::new(),
-            port: "22".to_string(),
-            username: String::new(),
-            auth_kind: AuthKind::PrivateKey,
-            password: String::new(),
-            key_path: String::new(),
-            key_passphrase: String::new(),
+            profile_name: profiles.first().map(|p| p.name.clone()).unwrap_or_default(),
             local_bind_addr: "127.0.0.1".to_string(),
             local_bind_port: String::new(),
             remote_host: String::new(),
             remote_port: String::new(),
-            jump: None,
             error: None,
         }
     }
 
-    /// Jump-host (ProxyJump) fields aren't editable in the form yet — hand
-    /// -edit config.toml for that until milestone 4b adds jump.rs, so an
-    /// existing tunnel's `jump` is carried through unchanged rather than
-    /// dropped when the tunnel is edited and re-saved.
     pub fn from_definition(def: &TunnelDefinition) -> Self {
-        let (auth_kind, password, key_path, key_passphrase) = match &def.auth {
-            AuthMethod::Password { password } => (
-                AuthKind::Password,
-                password.clone().unwrap_or_default(),
-                String::new(),
-                String::new(),
-            ),
-            AuthMethod::PrivateKey { path, passphrase } => (
-                AuthKind::PrivateKey,
-                String::new(),
-                path.to_string_lossy().to_string(),
-                passphrase.clone().unwrap_or_default(),
-            ),
-            AuthMethod::Agent => (AuthKind::Agent, String::new(), String::new(), String::new()),
-        };
-
         Self {
             editing_id: Some(def.id),
             focus_index: 0,
             name: def.name.clone(),
             direction: def.direction,
-            host: def.host.clone(),
-            port: def.port.to_string(),
-            username: def.username.clone(),
-            auth_kind,
-            password,
-            key_path,
-            key_passphrase,
+            profile_name: def.profile.clone(),
             local_bind_addr: def.local_bind.bind_addr.clone(),
             local_bind_port: def.local_bind.port.to_string(),
             remote_host: def
@@ -291,7 +238,6 @@ impl FormState {
                 .as_ref()
                 .map(|r| r.port.to_string())
                 .unwrap_or_default(),
-            jump: def.jump.clone(),
             error: None,
         }
     }
@@ -300,21 +246,10 @@ impl FormState {
         let mut fields = vec![
             FormField::Name,
             FormField::Direction,
-            FormField::Host,
-            FormField::Port,
-            FormField::Username,
-            FormField::AuthKind,
+            FormField::Profile,
+            FormField::LocalBindAddr,
+            FormField::LocalBindPort,
         ];
-        match self.auth_kind {
-            AuthKind::Password => fields.push(FormField::Password),
-            AuthKind::PrivateKey => {
-                fields.push(FormField::KeyPath);
-                fields.push(FormField::KeyPassphrase);
-            }
-            AuthKind::Agent => {}
-        }
-        fields.push(FormField::LocalBindAddr);
-        fields.push(FormField::LocalBindPort);
         if self.direction != Direction::Dynamic {
             fields.push(FormField::RemoteHost);
             fields.push(FormField::RemotePort);
@@ -351,16 +286,18 @@ impl FormState {
         self.clamp_focus();
     }
 
-    pub fn cycle_auth_kind(&mut self, forward: bool) {
-        self.auth_kind = match (self.auth_kind, forward) {
-            (AuthKind::Password, true) => AuthKind::PrivateKey,
-            (AuthKind::PrivateKey, true) => AuthKind::Agent,
-            (AuthKind::Agent, true) => AuthKind::Password,
-            (AuthKind::Password, false) => AuthKind::Agent,
-            (AuthKind::PrivateKey, false) => AuthKind::Password,
-            (AuthKind::Agent, false) => AuthKind::PrivateKey,
+    pub fn cycle_profile(&mut self, forward: bool, profiles: &[Profile]) {
+        if profiles.is_empty() {
+            return;
+        }
+        let current = profiles.iter().position(|p| p.name == self.profile_name);
+        let next = match (current, forward) {
+            (Some(i), true) => (i + 1) % profiles.len(),
+            (Some(0), false) => profiles.len() - 1,
+            (Some(i), false) => i - 1,
+            (None, _) => 0,
         };
-        self.clamp_focus();
+        self.profile_name = profiles[next].name.clone();
     }
 
     fn clamp_focus(&mut self) {
@@ -372,17 +309,11 @@ impl FormState {
     pub fn active_text_mut(&mut self) -> Option<&mut String> {
         match self.focused_field() {
             FormField::Name => Some(&mut self.name),
-            FormField::Host => Some(&mut self.host),
-            FormField::Port => Some(&mut self.port),
-            FormField::Username => Some(&mut self.username),
-            FormField::Password => Some(&mut self.password),
-            FormField::KeyPath => Some(&mut self.key_path),
-            FormField::KeyPassphrase => Some(&mut self.key_passphrase),
             FormField::LocalBindAddr => Some(&mut self.local_bind_addr),
             FormField::LocalBindPort => Some(&mut self.local_bind_port),
             FormField::RemoteHost => Some(&mut self.remote_host),
             FormField::RemotePort => Some(&mut self.remote_port),
-            FormField::Direction | FormField::AuthKind => None,
+            FormField::Direction | FormField::Profile => None,
         }
     }
 
@@ -390,36 +321,17 @@ impl FormState {
         if self.name.trim().is_empty() {
             return Err("Name is required".to_string());
         }
-        if self.host.trim().is_empty() {
-            return Err("Host is required".to_string());
+        if self.profile_name.trim().is_empty() {
+            return Err(
+                "No profile selected — add one under [[profiles]] in config.toml first".to_string(),
+            );
         }
 
-        let port: u16 = self
-            .port
-            .trim()
-            .parse()
-            .map_err(|_| "SSH port must be a number".to_string())?;
         let local_bind_port: u16 = self
             .local_bind_port
             .trim()
             .parse()
             .map_err(|_| "Local port must be a number".to_string())?;
-
-        let auth = match self.auth_kind {
-            AuthKind::Password => AuthMethod::Password {
-                password: non_empty(&self.password),
-            },
-            AuthKind::PrivateKey => {
-                if self.key_path.trim().is_empty() {
-                    return Err("Private key path is required".to_string());
-                }
-                AuthMethod::PrivateKey {
-                    path: PathBuf::from(self.key_path.trim()),
-                    passphrase: non_empty(&self.key_passphrase),
-                }
-            }
-            AuthKind::Agent => AuthMethod::Agent,
-        };
 
         let remote = if self.direction == Direction::Dynamic {
             None
@@ -442,11 +354,7 @@ impl FormState {
             id: self.editing_id.unwrap_or_else(Uuid::new_v4),
             name: self.name.trim().to_string(),
             direction: self.direction,
-            host: self.host.trim().to_string(),
-            port,
-            username: self.username.trim().to_string(),
-            auth,
-            jump: self.jump.clone(),
+            profile: self.profile_name.clone(),
             local_bind: SocketAddrSpec {
                 bind_addr: self.local_bind_addr.trim().to_string(),
                 port: local_bind_port,
@@ -455,14 +363,5 @@ impl FormState {
             autostart: false,
             enabled: true,
         })
-    }
-}
-
-fn non_empty(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
     }
 }

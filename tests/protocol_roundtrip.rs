@@ -1,4 +1,4 @@
-use pmanager::config::schema::{AuthMethod, Direction, SocketAddrSpec, TunnelDefinition};
+use pmanager::config::schema::{Direction, SocketAddrSpec, TunnelDefinition};
 use pmanager::ipc::protocol::{
     ClientMessage, ClientRequest, DaemonMessage, ResponsePayload, TunnelSnapshot,
 };
@@ -24,11 +24,7 @@ fn daemon_response_with_tunnel_list_round_trips() {
             id: Uuid::new_v4(),
             name: "example".to_string(),
             direction: Direction::Local,
-            host: "bastion.example.com".to_string(),
-            port: 22,
-            username: "deploy".to_string(),
-            auth: AuthMethod::Agent,
-            jump: None,
+            profile: "nixserver".to_string(),
             local_bind: SocketAddrSpec {
                 bind_addr: "127.0.0.1".to_string(),
                 port: 15432,

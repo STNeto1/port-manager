@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+use crate::config::resolve::ResolvedConnection;
 use crate::config::schema::{Direction, TunnelDefinition};
 use crate::model::{TunnelEvent, TunnelState};
 
@@ -28,17 +29,21 @@ pub enum TunnelCommand {
 /// configured), authenticates, starts the direction-specific forwarder, and
 /// reports every state transition on `event_tx` so the daemon core (and, via
 /// the broadcast channel, subscribed TUI clients) can follow along live.
+/// `conn` is the tunnel's profile already resolved to concrete connection
+/// details — resolving happens once, before the task is spawned.
 pub fn spawn_tunnel(
     def: TunnelDefinition,
+    conn: ResolvedConnection,
     event_tx: mpsc::UnboundedSender<TunnelEvent>,
 ) -> TunnelHandle {
     let (cmd_tx, cmd_rx) = mpsc::channel(4);
-    let join = tokio::spawn(run_tunnel_task(def, event_tx, cmd_rx));
+    let join = tokio::spawn(run_tunnel_task(def, conn, event_tx, cmd_rx));
     TunnelHandle { cmd_tx, join }
 }
 
 async fn run_tunnel_task(
     def: TunnelDefinition,
+    conn: ResolvedConnection,
     event_tx: mpsc::UnboundedSender<TunnelEvent>,
     mut cmd_rx: mpsc::Receiver<TunnelCommand>,
 ) {
@@ -49,7 +54,7 @@ async fn run_tunnel_task(
 
     send_state(TunnelState::Connecting);
 
-    let connection = match client::connect(id, &def).await {
+    let connection = match client::connect(id, &def, &conn).await {
         Ok(connection) => connection,
         Err(err) => {
             warn!(tunnel_id = %id, ?err, "failed to connect tunnel");

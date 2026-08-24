@@ -1,3 +1,4 @@
+pub mod resolve;
 pub mod schema;
 
 use std::path::{Path, PathBuf};

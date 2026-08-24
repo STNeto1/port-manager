@@ -6,7 +6,28 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
+    pub profiles: Vec<Profile>,
+    #[serde(default)]
     pub tunnels: Vec<TunnelDefinition>,
+}
+
+/// A reusable SSH connection — host/port/username/auth, and optionally a
+/// jump host (itself another profile's `name`, single-hop only). Any number
+/// of tunnels can reference the same profile by name instead of repeating
+/// its connection details, the same way an ssh_config `Host` block covers
+/// every `LocalForward` line under it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Profile {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: AuthMethod,
+    /// Name of another profile to jump through. That profile must not
+    /// itself have a `jump` set — chained (multi-hop) jumps aren't
+    /// supported yet.
+    #[serde(default)]
+    pub jump: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,12 +35,9 @@ pub struct TunnelDefinition {
     pub id: Uuid,
     pub name: String,
     pub direction: Direction,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub auth: AuthMethod,
-    #[serde(default)]
-    pub jump: Option<JumpHost>,
+    /// References a `Profile.name`. Resolved at start time, not validated
+    /// when the tunnel is added/edited.
+    pub profile: String,
     pub local_bind: SocketAddrSpec,
     #[serde(default)]
     pub remote: Option<HostPort>,
@@ -48,18 +66,6 @@ pub enum AuthMethod {
         passphrase: Option<String>,
     },
     Agent,
-}
-
-/// A single-hop ProxyJump host: the daemon connects and authenticates here
-/// first, then opens the target SSH session over a direct-tcpip channel from
-/// this host. Modeled on ~/.config/ssh/config's `worker`/`aldea` hosts, which
-/// are only reachable via `ProxyJump nixserver`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JumpHost {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub auth: AuthMethod,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
