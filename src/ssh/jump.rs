@@ -26,7 +26,7 @@ pub async fn connect_through(
     let mut jump_handle = client::connect(
         Arc::clone(&config),
         (jump.host.as_str(), jump.port),
-        Client::new(tunnel_id),
+        Client::new(tunnel_id, jump.host.as_str(), jump.port),
     )
     .await?;
     auth::authenticate(&mut jump_handle, &jump.username, &jump.auth).await?;
