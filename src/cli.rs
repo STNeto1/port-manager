@@ -13,4 +13,6 @@ pub enum Command {
     Tui,
     /// Run the daemon in the foreground
     Daemon,
+    /// List configured tunnels and their status
+    List,
 }

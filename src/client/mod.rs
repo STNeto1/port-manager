@@ -8,10 +8,12 @@ use color_eyre::eyre::{Result, eyre};
 use tokio::net::UnixStream;
 use tokio::time::sleep;
 
+use crate::config::schema::Direction;
 use crate::ipc::{
     self,
     protocol::{ClientMessage, ClientRequest, DaemonMessage, ResponsePayload},
 };
+use crate::model::TunnelState;
 
 pub struct DaemonClient {
     conn: ipc::Conn,
@@ -73,6 +75,49 @@ fn spawn_daemon() -> Result<()> {
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err))
         .spawn()?;
+
+    Ok(())
+}
+
+pub async fn list_tunnels() -> Result<()> {
+    let mut client = connect_or_spawn_daemon().await?;
+    let ResponsePayload::Tunnels(tunnels) = client.call(ClientRequest::ListTunnels).await? else {
+        return Err(eyre!("unexpected response to ListTunnels"));
+    };
+
+    if tunnels.is_empty() {
+        println!("No tunnels configured.");
+        return Ok(());
+    }
+
+    for snapshot in tunnels {
+        let direction = match snapshot.def.direction {
+            Direction::Local => "L",
+            Direction::Remote => "R",
+            Direction::Dynamic => "D",
+        };
+        let remote = snapshot
+            .def
+            .remote
+            .as_ref()
+            .map(|r| format!("{}:{}", r.host, r.port))
+            .unwrap_or_else(|| "-".to_string());
+        let status = match snapshot.state {
+            TunnelState::Stopped => "stopped".to_string(),
+            TunnelState::Connecting => "connecting".to_string(),
+            TunnelState::Connected { active_connections } => {
+                format!("connected ({active_connections} active)")
+            }
+            TunnelState::Error(err) => format!("error: {err}"),
+            TunnelState::Stopping => "stopping".to_string(),
+        };
+        println!(
+            "{name}\t[{direction}]\t{bind_addr}:{bind_port} <-> {remote}\t{status}",
+            name = snapshot.def.name,
+            bind_addr = snapshot.def.local_bind.bind_addr,
+            bind_port = snapshot.def.local_bind.port,
+        );
+    }
 
     Ok(())
 }

@@ -1,13 +1,16 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use color_eyre::eyre::{Result, bail};
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{info, warn};
 
+use crate::config::{self, Config};
 use crate::ipc::{
     self,
-    protocol::{ClientMessage, DaemonMessage, ResponsePayload},
+    protocol::{ClientMessage, ClientRequest, DaemonMessage, ResponsePayload, TunnelSnapshot},
 };
+use crate::model::TunnelState;
 
 pub async fn run() -> Result<()> {
     detach_from_terminal();
@@ -15,13 +18,19 @@ pub async fn run() -> Result<()> {
     let socket_path = ipc::socket_path();
     prepare_socket(&socket_path).await?;
 
+    let config_path = ipc::config_file_path();
+    let config = config::load(&config_path)?;
+    info!(tunnels = config.tunnels.len(), path = %config_path.display(), "config loaded");
+    let config = Arc::new(config);
+
     let listener = UnixListener::bind(&socket_path)?;
     info!(path = %socket_path.display(), "daemon listening");
 
     loop {
         let (stream, _addr) = listener.accept().await?;
+        let config = Arc::clone(&config);
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream).await {
+            if let Err(err) = handle_connection(stream, config).await {
                 warn!(?err, "connection handler exited with error");
             }
         });
@@ -59,14 +68,33 @@ async fn prepare_socket(path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn handle_connection(stream: UnixStream) -> Result<()> {
+async fn handle_connection(stream: UnixStream, config: Arc<Config>) -> Result<()> {
     let mut conn = ipc::framed(stream);
     while let Some(msg) = ipc::recv::<ClientMessage>(&mut conn).await? {
+        let result = handle_request(msg.request, &config);
         let response = DaemonMessage::Response {
             request_id: msg.request_id,
-            result: Ok(ResponsePayload::Ack),
+            result,
         };
         ipc::send(&mut conn, &response).await?;
     }
     Ok(())
+}
+
+fn handle_request(request: ClientRequest, config: &Config) -> Result<ResponsePayload, String> {
+    match request {
+        ClientRequest::Ping => Ok(ResponsePayload::Ack),
+        ClientRequest::ListTunnels => {
+            let tunnels = config
+                .tunnels
+                .iter()
+                .cloned()
+                .map(|def| TunnelSnapshot {
+                    def,
+                    state: TunnelState::Stopped,
+                })
+                .collect();
+            Ok(ResponsePayload::Tunnels(tunnels))
+        }
+    }
 }

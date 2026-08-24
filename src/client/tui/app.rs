@@ -1,15 +1,19 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::ipc::protocol::TunnelSnapshot;
+
 pub struct App {
     pub should_quit: bool,
     pub daemon_connected: bool,
+    pub tunnels: Vec<TunnelSnapshot>,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
             should_quit: false,
-            daemon_connected: true,
+            daemon_connected: false,
+            tunnels: Vec::new(),
         }
     }
 

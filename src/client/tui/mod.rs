@@ -11,14 +11,19 @@ use app::App;
 use event::{AppEvent, EventHandler};
 
 use crate::client::connect_or_spawn_daemon;
-use crate::ipc::protocol::ClientRequest;
+use crate::ipc::protocol::{ClientRequest, ResponsePayload};
 
 pub async fn run() -> Result<()> {
     let mut app = App::new();
-    app.daemon_connected = match connect_or_spawn_daemon().await {
-        Ok(mut client) => client.call(ClientRequest::Ping).await.is_ok(),
-        Err(_) => false,
-    };
+    if let Ok(mut client) = connect_or_spawn_daemon().await {
+        if let Ok(ResponsePayload::Tunnels(tunnels)) = client.call(ClientRequest::ListTunnels).await
+        {
+            app.tunnels = tunnels;
+            app.daemon_connected = true;
+        }
+    } else {
+        app.daemon_connected = false;
+    }
 
     let mut terminal = tui::init()?;
     let mut events = EventHandler::new(Duration::from_millis(200));
