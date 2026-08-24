@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, bail};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Notify, broadcast, mpsc};
+use tokio::sync::{Notify, broadcast, mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::config;
@@ -22,6 +22,13 @@ pub async fn run() -> Result<()> {
     let loaded_config = config::load(&config_path)?;
     info!(tunnels = loaded_config.tunnels.len(), path = %config_path.display(), "config loaded");
 
+    let autostart_ids: Vec<_> = loaded_config
+        .tunnels
+        .iter()
+        .filter(|t| t.autostart)
+        .map(|t| t.id)
+        .collect();
+
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
     let (events_tx, _events_rx) = broadcast::channel(256);
     let shutdown = Arc::new(Notify::new());
@@ -33,6 +40,23 @@ pub async fn run() -> Result<()> {
         cmd_tx.clone(),
     );
     tokio::spawn(core::run(cmd_rx, daemon_core, Arc::clone(&shutdown)));
+
+    for id in autostart_ids {
+        let cmd_tx = cmd_tx.clone();
+        tokio::spawn(async move {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            if cmd_tx
+                .send(core::DaemonCommand::StartTunnel(id, reply_tx))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            if let Ok(Err(err)) = reply_rx.await {
+                warn!(tunnel_id = %id, ?err, "autostart failed");
+            }
+        });
+    }
 
     let listener = UnixListener::bind(&socket_path)?;
     info!(path = %socket_path.display(), "daemon listening");

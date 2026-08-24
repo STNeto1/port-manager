@@ -18,6 +18,5 @@ tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.19", features = ["codec"] }
 toml = "1.1.4"
 tracing = "0.1.44"
-tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.25.0", features = ["v4", "serde"] }

@@ -9,6 +9,11 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
+
+    /// Log level for the daemon (e.g. "info", "debug", "pmanager=trace").
+    /// Overrides RUST_LOG. Has no effect on the TUI, which doesn't log.
+    #[arg(long, global = true)]
+    pub log_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Subcommand)]

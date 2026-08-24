@@ -11,7 +11,10 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Command::Tui) {
         Command::Tui => client::tui::run().await,
-        Command::Daemon => daemon::run().await,
+        Command::Daemon => {
+            pmanager::logging::init_daemon_logging(cli.log_level.as_deref());
+            daemon::run().await
+        }
         Command::List => client::list_tunnels().await,
         Command::Start { name } => client::start_tunnel(&name).await,
         Command::Stop { name } => client::stop_tunnel(&name).await,

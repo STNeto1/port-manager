@@ -1,1 +1,111 @@
-# Port manager
+# pmanager
+
+A terminal UI for managing SSH port-forwarding tunnels — local (`-L`), remote (`-R`), and dynamic/SOCKS (`-D`) — including tunnels reached through a jump host (`ProxyJump`).
+
+A background **daemon** owns every SSH session and keeps tunnels running independently of the UI; the **TUI** (and a few headless CLI commands) are thin clients that connect to it over a Unix domain socket. Closing the TUI does not stop your tunnels.
+
+## Install
+
+```sh
+make install   # cargo install --path . --force
+```
+
+or just build it in place:
+
+```sh
+make build     # cargo build
+make release   # cargo build --release
+```
+
+## Quick start
+
+```sh
+pmanager
+```
+
+Running `pmanager` with no arguments launches the TUI. If no daemon is running yet, it starts one automatically — there's nothing to set up by hand for local use. The first run creates an empty config at `~/.config/pmanager/config.toml`; press `a` in the TUI to add your first tunnel.
+
+## CLI
+
+| Command | What it does |
+|---|---|
+| `pmanager` / `pmanager tui` | Launch the TUI (default). Auto-spawns the daemon if needed. |
+| `pmanager daemon` | Run the daemon in the foreground (for a supervisor, e.g. launchd/systemd, or invoked internally by auto-spawn). |
+| `pmanager list` | Print configured tunnels and their status. |
+| `pmanager start <name>` | Start a tunnel by name; it keeps running after the command exits. |
+| `pmanager stop <name>` | Stop a running tunnel by name. |
+| `pmanager shutdown` | Stop the daemon and every tunnel it's running. |
+| `pmanager daemon --log-level <level>` | Set the daemon's log level (e.g. `info`, `debug`, `pmanager=trace`). Overrides `RUST_LOG`. |
+
+The daemon logs to stdout. When auto-spawned it's redirected to `~/.config/pmanager/daemon.log`; run `pmanager daemon` yourself in a terminal (or under a supervisor) to see or capture it directly.
+
+## TUI keybindings
+
+| Key | Action |
+|---|---|
+| `↑`/`k`, `↓`/`j` | Move selection |
+| `Enter` / `s` | Start or stop the selected tunnel |
+| `a` | Add a tunnel |
+| `e` | Edit the selected tunnel (stops it if running — start it again to pick up changes) |
+| `d` | Delete the selected tunnel (asks to confirm) |
+| `r` | Reload `config.toml` from disk |
+| `q` / `Ctrl+C` | Quit the TUI (does **not** stop the daemon or its tunnels) |
+| `Esc` | Cancel a form or modal |
+| Add/edit form: `Tab`/`Shift+Tab` or `↑`/`↓` | Move between fields |
+| Add/edit form: `←`/`→` | Change a multiple-choice field (direction, auth method) |
+
+## Config file
+
+`~/.config/pmanager/config.toml`, created automatically on first run and safe to hand-edit (`r` in the TUI reloads it). Each `[[tunnels]]` entry:
+
+```toml
+[[tunnels]]
+id = "9d2e7f10-...."          # UUID, assigned automatically — don't reuse across entries
+name = "worker-dev-server"
+direction = "local"            # "local" | "remote" | "dynamic"
+host = "10.233.1.2"
+port = 22
+username = "germano"
+enabled = true
+autostart = false               # start automatically when the daemon launches
+
+[tunnels.auth]
+type = "private_key"            # "password" | "private_key" | "agent"
+path = "/Users/me/.ssh/id_ed25519"
+passphrase = ""                  # omit or leave blank if the key isn't encrypted
+
+# Optional: reach `host` through a bastion (ProxyJump). Single hop only.
+[tunnels.jump]
+host = "192.168.1.50"
+port = 22
+username = "germano"
+[tunnels.jump.auth]
+type = "private_key"
+path = "/Users/me/.ssh/id_ed25519"
+
+[tunnels.local_bind]            # where pmanager listens locally
+bind_addr = "127.0.0.1"
+port = 1337
+
+[tunnels.remote]                # meaning depends on direction — see below
+host = "localhost"
+port = 1337
+```
+
+`[tunnels.remote]`'s meaning depends on `direction`:
+- **local**: the address `host` connects to *on the far side* of the SSH session (classic `ssh -L local_bind:remote`).
+- **remote**: the address the daemon connects to *locally* when the server forwards a connection back (classic `ssh -R remote_bind:this_field`, with `local_bind` acting as the server-side bind address/port).
+- **dynamic**: not used — SOCKS clients supply their own target per-connection.
+
+**Auth methods**: `agent` (recommended — talks to `ssh-agent` via `$SSH_AUTH_SOCK`, no secrets in the config file), `private_key` (path + optional passphrase — a plaintext passphrase in `config.toml` is a real risk if the key needs one), and `password` (plaintext password in `config.toml` — avoid unless you understand that tradeoff; the add/edit form doesn't warn on this yet).
+
+## Host key verification
+
+Server host keys are checked against your normal `~/.ssh/known_hosts` — the same file and format the system `ssh` client uses, so hosts you've already connected to with `ssh` are already trusted here. An unrecorded host is trusted on first connection and then recorded (`accept-new` semantics, like `ssh -o StrictHostKeyChecking=accept-new`) since the daemon has no terminal to interactively prompt on. A host presenting a **different** key than the one on record is always rejected — that's the actual attack this check exists to catch. Certificate-based host authentication isn't verified yet (falls back to trust-without-checking, logged loudly).
+
+## Known limitations
+
+- ProxyJump supports a single hop, not a chain of jump hosts.
+- The add/edit form doesn't yet expose jump-host fields — set those by hand-editing `config.toml`.
+- No SSH certificate-based host verification.
+- Running the daemon persistently across reboots (e.g. via launchd or systemd) isn't automated — write your own unit/plist invoking `pmanager daemon` if you want that.
