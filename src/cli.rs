@@ -1,0 +1,16 @@
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(name = "pmanager", version, about = "Manage SSH port-forwarding tunnels")]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    /// Launch the TUI client (default)
+    Tui,
+    /// Run the daemon in the foreground
+    Daemon,
+}
