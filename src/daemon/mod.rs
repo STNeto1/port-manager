@@ -26,7 +26,12 @@ pub async fn run() -> Result<()> {
     let (events_tx, _events_rx) = broadcast::channel(256);
     let shutdown = Arc::new(Notify::new());
 
-    let daemon_core = core::DaemonCore::new(config_path, loaded_config, events_tx.clone());
+    let daemon_core = core::DaemonCore::new(
+        config_path,
+        loaded_config,
+        events_tx.clone(),
+        cmd_tx.clone(),
+    );
     tokio::spawn(core::run(cmd_rx, daemon_core, Arc::clone(&shutdown)));
 
     let listener = UnixListener::bind(&socket_path)?;
