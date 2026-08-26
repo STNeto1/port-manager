@@ -96,6 +96,15 @@ async fn dispatch(
         ClientRequest::StopTunnel(id) => {
             simple_command(cmd_tx, |reply| DaemonCommand::StopTunnel(id, reply)).await
         }
+        ClientRequest::AddProfile(profile) => {
+            simple_command(cmd_tx, |reply| DaemonCommand::AddProfile(profile, reply)).await
+        }
+        ClientRequest::UpdateProfile(profile) => {
+            simple_command(cmd_tx, |reply| DaemonCommand::UpdateProfile(profile, reply)).await
+        }
+        ClientRequest::RemoveProfile(name) => {
+            simple_command(cmd_tx, |reply| DaemonCommand::RemoveProfile(name, reply)).await
+        }
         ClientRequest::ReloadConfig => simple_command(cmd_tx, DaemonCommand::ReloadConfig).await,
         ClientRequest::ShutdownDaemon => {
             let (tx, rx) = oneshot::channel();

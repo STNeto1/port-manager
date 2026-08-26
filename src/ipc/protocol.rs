@@ -20,6 +20,11 @@ pub enum ClientRequest {
     RemoveTunnel(Uuid),
     StartTunnel(Uuid),
     StopTunnel(Uuid),
+    AddProfile(Profile),
+    /// Matched to an existing profile by `name`; the name itself can't be
+    /// changed this way — delete and recreate to rename.
+    UpdateProfile(Profile),
+    RemoveProfile(String),
     ReloadConfig,
     /// Puts this connection into event-streaming mode: after the Ack
     /// response, the daemon only ever pushes `DaemonMessage::Event`s on it.

@@ -28,6 +28,9 @@ pub enum DaemonCommand {
     RemoveTunnel(Uuid, CommandReply),
     StartTunnel(Uuid, CommandReply),
     StopTunnel(Uuid, CommandReply),
+    AddProfile(Profile, CommandReply),
+    UpdateProfile(Profile, CommandReply),
+    RemoveProfile(String, CommandReply),
     ReloadConfig(CommandReply),
     /// Fire-and-forget: a running tunnel's ssh task reporting a state
     /// transition (Connecting/Connected/Error/Stopped/...).
@@ -154,6 +157,53 @@ impl DaemonCore {
         }
         Ok(())
     }
+
+    fn add_profile(&mut self, profile: Profile) -> Result<(), String> {
+        if self.profiles.iter().any(|p| p.name == profile.name) {
+            return Err(format!("a profile named '{}' already exists", profile.name));
+        }
+        let mut candidate = self.profiles.clone();
+        candidate.push(profile.clone());
+        resolve::resolve_connection(&candidate, &profile.name)?;
+        self.profiles = candidate;
+        self.persist()
+    }
+
+    fn update_profile(&mut self, profile: Profile) -> Result<(), String> {
+        let idx = self
+            .profiles
+            .iter()
+            .position(|p| p.name == profile.name)
+            .ok_or_else(|| format!("no profile named '{}'", profile.name))?;
+        let mut candidate = self.profiles.clone();
+        candidate[idx] = profile.clone();
+        resolve::resolve_connection(&candidate, &profile.name)?;
+        self.profiles = candidate;
+        self.persist()
+    }
+
+    fn remove_profile(&mut self, name: &str) -> Result<(), String> {
+        if self.tunnels.values().any(|t| t.def.profile == name) {
+            return Err(format!(
+                "profile '{name}' is used by a tunnel; delete or reassign that tunnel first"
+            ));
+        }
+        if self
+            .profiles
+            .iter()
+            .any(|p| p.jump.as_deref() == Some(name))
+        {
+            return Err(format!(
+                "profile '{name}' is used as a jump host by another profile"
+            ));
+        }
+        let before = self.profiles.len();
+        self.profiles.retain(|p| p.name != name);
+        if self.profiles.len() == before {
+            return Err(format!("no profile named '{name}'"));
+        }
+        self.persist()
+    }
 }
 
 fn index_by_id(config: Config) -> HashMap<Uuid, TunnelRuntime> {
@@ -230,6 +280,15 @@ pub async fn run(
             }
             DaemonCommand::StopTunnel(id, reply) => {
                 let _ = reply.send(core.stop(id));
+            }
+            DaemonCommand::AddProfile(profile, reply) => {
+                let _ = reply.send(core.add_profile(profile));
+            }
+            DaemonCommand::UpdateProfile(profile, reply) => {
+                let _ = reply.send(core.update_profile(profile));
+            }
+            DaemonCommand::RemoveProfile(name, reply) => {
+                let _ = reply.send(core.remove_profile(&name));
             }
             DaemonCommand::ReloadConfig(reply) => match config::load(&core.config_path) {
                 Ok(config) => {
