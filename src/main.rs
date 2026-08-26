@@ -1,7 +1,7 @@
 use clap::Parser;
 use color_eyre::eyre::Result;
-use pmanager::cli::{Cli, Command};
-use pmanager::{client, daemon};
+use pmanager::cli::{Cli, Command, ServiceAction};
+use pmanager::{client, daemon, service};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,5 +19,9 @@ async fn main() -> Result<()> {
         Command::Start { name } => client::start_tunnel(&name).await,
         Command::Stop { name } => client::stop_tunnel(&name).await,
         Command::Shutdown => client::shutdown_daemon().await,
+        Command::Service { action } => match action {
+            ServiceAction::Install => service::install(cli.log_level.as_deref()),
+            ServiceAction::Uninstall => service::uninstall(),
+        },
     }
 }

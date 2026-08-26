@@ -30,4 +30,18 @@ pub enum Command {
     Stop { name: String },
     /// Stop the daemon and all of its tunnels
     Shutdown,
+    /// Install or remove a launchd (macOS) / systemd (Linux) unit so the
+    /// daemon runs persistently across logins/reboots
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ServiceAction {
+    /// Install and start the persistent daemon service
+    Install,
+    /// Stop and remove the persistent daemon service
+    Uninstall,
 }

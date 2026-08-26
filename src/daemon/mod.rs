@@ -61,12 +61,25 @@ pub async fn run() -> Result<()> {
     let listener = UnixListener::bind(&socket_path)?;
     info!(path = %socket_path.display(), "daemon listening");
 
-    let ctrl_c_shutdown = Arc::clone(&shutdown);
+    let signal_shutdown = Arc::clone(&shutdown);
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            info!("received Ctrl+C, shutting down");
-            ctrl_c_shutdown.notify_one();
+        // SIGTERM is what a supervisor (launchd's `bootout`, systemd's
+        // `stop`/`disable`) sends to ask a persistent daemon to exit — it
+        // needs the same graceful path as Ctrl+C, or the socket file and
+        // any in-flight tunnels never get torn down cleanly.
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(sigterm) => sigterm,
+                Err(err) => {
+                    warn!(?err, "failed to install SIGTERM handler");
+                    return;
+                }
+            };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => info!("received Ctrl+C, shutting down"),
+            _ = sigterm.recv() => info!("received SIGTERM, shutting down"),
         }
+        signal_shutdown.notify_one();
     });
 
     loop {

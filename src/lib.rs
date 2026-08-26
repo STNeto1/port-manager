@@ -5,4 +5,5 @@ pub mod daemon;
 pub mod ipc;
 pub mod logging;
 pub mod model;
+pub mod service;
 pub mod ssh;

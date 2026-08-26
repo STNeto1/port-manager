@@ -35,9 +35,20 @@ Running `pmanager` with no arguments launches the TUI. If no daemon is running y
 | `pmanager start <name>` | Start a tunnel by name; it keeps running after the command exits. |
 | `pmanager stop <name>` | Stop a running tunnel by name. |
 | `pmanager shutdown` | Stop the daemon and every tunnel it's running. |
+| `pmanager service install` | Install and start a persistent per-user launchd/systemd service (see below). |
+| `pmanager service uninstall` | Stop and remove that service. |
 | `pmanager daemon --log-level <level>` | Set the daemon's log level (e.g. `info`, `debug`, `pmanager=trace`). Overrides `RUST_LOG`. |
 
 The daemon logs to stdout. When auto-spawned it's redirected to `~/.config/pmanager/daemon.log`; run `pmanager daemon` yourself in a terminal (or under a supervisor) to see or capture it directly.
+
+## Persistent daemon (launchd / systemd)
+
+`pmanager service install` sets up the daemon to start automatically on login and restart if it crashes, so tunnels with `autostart = true` come up without needing the TUI or any client to connect first:
+
+- **macOS**: writes a per-user LaunchAgent to `~/Library/LaunchAgents/com.pmanager.daemon.plist` and loads it with `launchctl bootstrap`.
+- **Linux**: writes a systemd **user** unit to `~/.config/systemd/user/pmanager.service` and starts it with `systemctl --user enable --now`. For the unit to keep running without an active login session, also run `loginctl enable-linger $USER` — `pmanager service install` doesn't do this for you.
+
+Both write the currently-running `pmanager` binary's own path into the service definition — reinstall (`pmanager service uninstall` then `install` again) after upgrading the binary at a different path (e.g. after `cargo install --path . --force`) so the service points at the new one. `pmanager service uninstall` stops the service and removes its plist/unit file; it doesn't touch `~/.config/pmanager/config.toml`.
 
 ## TUI keybindings
 
@@ -113,4 +124,3 @@ Server host keys are checked against your normal `~/.ssh/known_hosts` — the sa
 ## Known limitations
 
 - No SSH certificate-based host verification.
-- Running the daemon persistently across reboots (e.g. via launchd or systemd) isn't automated — write your own unit/plist invoking `pmanager daemon` if you want that.
