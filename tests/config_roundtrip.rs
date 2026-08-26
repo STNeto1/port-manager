@@ -95,20 +95,43 @@ fn resolves_profile_through_a_jump_profile() {
 
     let resolved = resolve_connection(&profiles, "worker").expect("should resolve");
     assert_eq!(resolved.host, "bastion.example.com");
-    let jump = resolved.jump.expect("worker should have a jump");
-    assert_eq!(jump.host, "bastion.example.com");
+    assert_eq!(resolved.jumps.len(), 1);
+    assert_eq!(resolved.jumps[0].host, "bastion.example.com");
+}
+
+fn profile_with_host(name: &str, host: &str, jump: Option<String>) -> Profile {
+    Profile {
+        host: host.to_string(),
+        ..sample_profile(name, AuthMethod::Agent, jump)
+    }
 }
 
 #[test]
-fn rejects_chained_multi_hop_jumps() {
+fn resolves_multi_hop_jump_chain_in_dial_order() {
     let profiles = vec![
-        sample_profile("a", AuthMethod::Agent, None),
-        sample_profile("b", AuthMethod::Agent, Some("a".to_string())),
-        sample_profile("c", AuthMethod::Agent, Some("b".to_string())),
+        profile_with_host("a", "a.example.com", None),
+        profile_with_host("b", "b.example.com", Some("a".to_string())),
+        profile_with_host("c", "c.example.com", Some("b".to_string())),
     ];
 
-    let result = resolve_connection(&profiles, "c");
-    assert!(result.is_err());
+    let resolved = resolve_connection(&profiles, "c").expect("chain should resolve");
+    assert_eq!(resolved.jumps.len(), 2);
+    // Dial order is nearest-to-daemon first: "a" before "b".
+    assert_eq!(resolved.jumps[0].host, "a.example.com");
+    assert_eq!(resolved.jumps[1].host, "b.example.com");
+}
+
+#[test]
+fn rejects_jump_chain_cycles() {
+    let profiles = vec![
+        sample_profile("a", AuthMethod::Agent, Some("b".to_string())),
+        sample_profile("b", AuthMethod::Agent, Some("a".to_string())),
+    ];
+
+    match resolve_connection(&profiles, "a") {
+        Err(err) => assert!(err.contains("cycle"), "unexpected error: {err}"),
+        Ok(_) => panic!("expected a cycle error"),
+    }
 }
 
 #[test]

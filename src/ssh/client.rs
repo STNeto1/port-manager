@@ -143,13 +143,14 @@ impl client::Handler for Client {
 }
 
 /// An authenticated session to a tunnel's target host, transparently hopping
-/// through `conn.jump` first if set. When jumping, the jump host's own
-/// session must be kept alive for as long as the target session is used —
-/// the channel it opened is what the target session's stream runs over —
-/// so both handles are held here rather than only returning the target one.
+/// through `conn.jumps` first if any are set. Each jump's own session must
+/// be kept alive for as long as the target session is used — the channel it
+/// opened is what the next hop's (or the target's) stream runs over — so
+/// every intermediate handle is held here rather than only returning the
+/// target one.
 pub struct Connection {
     pub target: client::Handle<Client>,
-    _jump_guard: Option<client::Handle<Client>>,
+    _jump_guards: Vec<client::Handle<Client>>,
 }
 
 pub async fn connect(
@@ -172,31 +173,28 @@ pub async fn connect(
         Direction::Local | Direction::Dynamic => Client::new(tunnel_id, &conn.host, conn.port),
     };
 
-    let connection = match &conn.jump {
-        None => {
-            let mut handle =
-                client::connect(config, (conn.host.as_str(), conn.port), target_client).await?;
-            auth::authenticate(&mut handle, &conn.username, &conn.auth).await?;
-            Connection {
-                target: handle,
-                _jump_guard: None,
-            }
+    let connection = if conn.jumps.is_empty() {
+        let mut handle =
+            client::connect(config, (conn.host.as_str(), conn.port), target_client).await?;
+        auth::authenticate(&mut handle, &conn.username, &conn.auth).await?;
+        Connection {
+            target: handle,
+            _jump_guards: Vec::new(),
         }
-        Some(jump) => {
-            let (jump_handle, mut target_handle) = super::jump::connect_through(
-                tunnel_id,
-                jump,
-                &conn.host,
-                conn.port,
-                config,
-                target_client,
-            )
-            .await?;
-            auth::authenticate(&mut target_handle, &conn.username, &conn.auth).await?;
-            Connection {
-                target: target_handle,
-                _jump_guard: Some(jump_handle),
-            }
+    } else {
+        let (jump_handles, mut target_handle) = super::jump::connect_through(
+            tunnel_id,
+            &conn.jumps,
+            &conn.host,
+            conn.port,
+            config,
+            target_client,
+        )
+        .await?;
+        auth::authenticate(&mut target_handle, &conn.username, &conn.auth).await?;
+        Connection {
+            target: target_handle,
+            _jump_guards: jump_handles,
         }
     };
 

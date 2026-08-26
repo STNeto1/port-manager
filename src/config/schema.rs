@@ -12,10 +12,10 @@ pub struct Config {
 }
 
 /// A reusable SSH connection — host/port/username/auth, and optionally a
-/// jump host (itself another profile's `name`, single-hop only). Any number
-/// of tunnels can reference the same profile by name instead of repeating
-/// its connection details, the same way an ssh_config `Host` block covers
-/// every `LocalForward` line under it.
+/// jump host (itself another profile's `name`). Any number of tunnels can
+/// reference the same profile by name instead of repeating its connection
+/// details, the same way an ssh_config `Host` block covers every
+/// `LocalForward` line under it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
     pub name: String,
@@ -23,9 +23,9 @@ pub struct Profile {
     pub port: u16,
     pub username: String,
     pub auth: AuthMethod,
-    /// Name of another profile to jump through. That profile must not
-    /// itself have a `jump` set — chained (multi-hop) jumps aren't
-    /// supported yet.
+    /// Name of another profile to jump through. That profile may itself
+    /// have a `jump`, forming a chain of any length; a chain that cycles
+    /// back on itself is rejected when the connection is resolved.
     #[serde(default)]
     pub jump: Option<String>,
 }

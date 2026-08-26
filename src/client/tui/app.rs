@@ -613,15 +613,16 @@ impl ProfileFormState {
         self.clamp_focus();
     }
 
-    /// Candidates exclude this profile itself and — matching the current
-    /// single-hop constraint enforced in `resolve::resolve_connection` —
-    /// any profile that already has a jump of its own.
+    /// Candidates exclude this profile itself and any profile whose jump
+    /// chain would loop back to it — matching the cycle check enforced in
+    /// `resolve::resolve_connection`. Chains of any length are otherwise
+    /// allowed.
     pub fn cycle_jump(&mut self, forward: bool, profiles: &[Profile]) {
         let candidates: Vec<Option<String>> = std::iter::once(None)
             .chain(
                 profiles
                     .iter()
-                    .filter(|p| p.name != self.name && p.jump.is_none())
+                    .filter(|p| p.name != self.name && !would_cycle(profiles, &self.name, &p.name))
                     .map(|p| Some(p.name.clone())),
             )
             .collect();
@@ -705,4 +706,22 @@ impl ProfileFormState {
             jump: self.jump_name.clone(),
         })
     }
+}
+
+/// Whether setting `editing_name`'s jump to `candidate` would create a
+/// cycle — i.e. whether `candidate`'s own jump chain loops back around to
+/// `editing_name`.
+fn would_cycle(profiles: &[Profile], editing_name: &str, candidate: &str) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut cur = Some(candidate.to_string());
+    while let Some(name) = cur {
+        if name == editing_name || !seen.insert(name.clone()) {
+            return true;
+        }
+        cur = profiles
+            .iter()
+            .find(|p| p.name == name)
+            .and_then(|p| p.jump.clone());
+    }
+    false
 }

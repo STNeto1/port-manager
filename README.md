@@ -75,7 +75,7 @@ name = "worker"
 host = "10.233.1.2"
 port = 22
 username = "germano"
-jump = "nixserver"                # reach `worker` through the `nixserver` profile. Single hop only.
+jump = "nixserver"                # reach `worker` through the `nixserver` profile. That profile can itself have a `jump`, chaining any number of hops.
 [profiles.auth]
 type = "private_key"
 path = "/Users/me/.ssh/id_ed25519"
@@ -112,6 +112,5 @@ Server host keys are checked against your normal `~/.ssh/known_hosts` — the sa
 
 ## Known limitations
 
-- ProxyJump supports a single hop, not a chain of jump hosts — a profile's `jump` must point at a profile with no `jump` of its own.
 - No SSH certificate-based host verification.
 - Running the daemon persistently across reboots (e.g. via launchd or systemd) isn't automated — write your own unit/plist invoking `pmanager daemon` if you want that.
