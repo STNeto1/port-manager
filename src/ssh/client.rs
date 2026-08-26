@@ -47,32 +47,82 @@ impl Client {
             remote_forward_target: Some(target),
         }
     }
+
+    /// Accepts a host certificate only if it's signed by a CA trusted for
+    /// this host (an `@cert-authority` entry in `~/.ssh/known_hosts`) and
+    /// its principals include this host. `Certificate::validate` already
+    /// checks the CA signature and the validity time window; the
+    /// principals check is left to the caller by design (see its docs), so
+    /// it's done here explicitly.
+    fn check_server_certificate(&self, cert: &russh::keys::Certificate) -> bool {
+        let trusted = super::ca_trust::trusted_fingerprints_for_host(&self.host, self.port);
+        if trusted.is_empty() {
+            warn!(
+                tunnel_id = %self.tunnel_id,
+                host = %self.host,
+                "REJECTING connection: host presented a certificate but no @cert-authority entry in ~/.ssh/known_hosts matches this host"
+            );
+            return false;
+        }
+
+        if let Err(err) = cert.validate(trusted.iter()) {
+            warn!(
+                tunnel_id = %self.tunnel_id,
+                host = %self.host,
+                ?err,
+                "REJECTING connection: host certificate failed CA/validity-window validation"
+            );
+            return false;
+        }
+
+        let principals = cert.valid_principals();
+        if !principals.is_empty() && !principals.iter().any(|p| p == &self.host) {
+            warn!(
+                tunnel_id = %self.tunnel_id,
+                host = %self.host,
+                ?principals,
+                "REJECTING connection: host certificate's principals don't include this host"
+            );
+            return false;
+        }
+
+        info!(
+            tunnel_id = %self.tunnel_id,
+            host = %self.host,
+            "host certificate verified against a trusted CA"
+        );
+        true
+    }
 }
 
 impl client::Handler for Client {
     type Error = russh::Error;
 
-    /// Verifies against the user's own `~/.ssh/known_hosts` (the standard
-    /// location `russh::keys::check_known_hosts` reads), the same file the
-    /// system `ssh` client uses — so hosts already trusted via a normal
-    /// `ssh` connection are trusted here too. An unknown host is trusted on
-    /// first use and then recorded, so later connections pin it: this is
-    /// "accept-new" semantics (like `ssh -o StrictHostKeyChecking=accept-new`),
-    /// not full interactive prompting, since a headless daemon has no
-    /// terminal to prompt on. A host presenting a *different* key than the
-    /// one on record is always rejected — that's the actual MITM case this
-    /// exists to catch.
+    /// Verifies a plain host key against the user's own `~/.ssh/known_hosts`
+    /// (the standard location `russh::keys::check_known_hosts` reads), the
+    /// same file the system `ssh` client uses — so hosts already trusted
+    /// via a normal `ssh` connection are trusted here too. An unknown host
+    /// is trusted on first use and then recorded, so later connections pin
+    /// it: this is "accept-new" semantics (like
+    /// `ssh -o StrictHostKeyChecking=accept-new`), not full interactive
+    /// prompting, since a headless daemon has no terminal to prompt on. A
+    /// host presenting a *different* key than the one on record is always
+    /// rejected — that's the actual MITM case this exists to catch.
+    ///
+    /// A host presenting a *certificate* instead is verified against
+    /// `@cert-authority` lines in the same `known_hosts` file (see
+    /// `ssh::ca_trust`) rather than through TOFU — a certificate is only
+    /// trustworthy because a CA signed it, so there's no "first use" to
+    /// pin.
     async fn check_server_key(
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let PublicKeyOrCertificate::PublicKey { key, .. } = server_public_key else {
-            warn!(
-                tunnel_id = %self.tunnel_id,
-                host = %self.host,
-                "host presented a certificate, not a plain public key; known_hosts verification doesn't support certificates yet, accepting without verification"
-            );
-            return Ok(true);
+        let key = match server_public_key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key,
+            PublicKeyOrCertificate::Certificate(cert) => {
+                return Ok(self.check_server_certificate(cert));
+            }
         };
 
         match russh::keys::check_known_hosts(&self.host, self.port, key) {
@@ -158,10 +208,16 @@ pub async fn connect(
     def: &TunnelDefinition,
     conn: &ResolvedConnection,
 ) -> Result<Connection> {
-    let config = Arc::new(client::Config {
+    // `Config::default()`'s `preferred.host_key_certificates` is empty, so
+    // without this a server is never even offered the chance to present a
+    // host certificate — mirroring the default plain-key algorithm list is
+    // what lets `check_server_key`'s certificate branch actually run.
+    let mut config = client::Config {
         nodelay: true,
         ..Default::default()
-    });
+    };
+    config.preferred.host_key_certificates = config.preferred.key.clone();
+    let config = Arc::new(config);
 
     let target_client = match def.direction {
         Direction::Remote => {

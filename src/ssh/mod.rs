@@ -1,4 +1,5 @@
 pub mod auth;
+mod ca_trust;
 pub mod client;
 pub mod dynamic_forward;
 pub mod jump;
