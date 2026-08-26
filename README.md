@@ -45,14 +45,15 @@ The daemon logs to stdout. When auto-spawned it's redirected to `~/.config/pmana
 |---|---|
 | `↑`/`k`, `↓`/`j` | Move selection |
 | `Enter` / `s` | Start or stop the selected tunnel |
-| `a` | Add a tunnel |
-| `e` | Edit the selected tunnel (stops it if running — start it again to pick up changes) |
-| `d` | Delete the selected tunnel (asks to confirm) |
+| `p` | Switch between the Tunnels and Profiles panels |
+| `a` | Add a tunnel/profile (whichever panel is active) |
+| `e` | Edit the selected tunnel/profile (editing a running tunnel stops it — start it again to pick up changes) |
+| `d` | Delete the selected tunnel/profile (asks to confirm) |
 | `r` | Reload `config.toml` from disk |
 | `q` / `Ctrl+C` | Quit the TUI (does **not** stop the daemon or its tunnels) |
 | `Esc` | Cancel a form or modal |
 | Add/edit form: `Tab`/`Shift+Tab` or `↑`/`↓` | Move between fields |
-| Add/edit form: `←`/`→` | Change a multiple-choice field (direction, auth method) |
+| Add/edit form: `←`/`→` | Change a multiple-choice field (direction, auth method, jump) |
 
 ## Config file
 
@@ -103,7 +104,7 @@ port = 1337
 
 **Auth methods** (set per-profile): `agent` (recommended — talks to `ssh-agent` via `$SSH_AUTH_SOCK`, no secrets in the config file), `private_key` (path + optional passphrase — a plaintext passphrase in `config.toml` is a real risk if the key needs one), and `password` (plaintext password in `config.toml` — avoid unless you understand that tradeoff; the add/edit form doesn't warn on this yet).
 
-The add/edit form lets you pick from existing profiles (left/right on the Profile field) but doesn't create or edit profiles itself yet — add those under `[[profiles]]` by hand first.
+Profiles can be created, edited, and deleted from the TUI itself — press `p` to switch to the Profiles panel, then `a`/`e`/`d` as usual. A profile's `name` is its identity and can't be changed from an edit form; delete and recreate it to rename. Deleting a profile that's still referenced by a tunnel, or used as another profile's `jump`, is rejected until that reference is removed.
 
 ## Host key verification
 
@@ -112,6 +113,5 @@ Server host keys are checked against your normal `~/.ssh/known_hosts` — the sa
 ## Known limitations
 
 - ProxyJump supports a single hop, not a chain of jump hosts — a profile's `jump` must point at a profile with no `jump` of its own.
-- Profiles aren't creatable or editable from the TUI yet — add/edit `[[profiles]]` by hand in `config.toml`.
 - No SSH certificate-based host verification.
 - Running the daemon persistently across reboots (e.g. via launchd or systemd) isn't automated — write your own unit/plist invoking `pmanager daemon` if you want that.

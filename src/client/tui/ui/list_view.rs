@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Row, Table, TableState},
 };
 
-use crate::config::schema::Direction;
+use crate::config::schema::{AuthMethod, Direction, Profile};
 use crate::ipc::protocol::TunnelSnapshot;
 use crate::model::TunnelState;
 
@@ -51,6 +51,49 @@ pub fn draw(
     let table = Table::new(rows, widths)
         .header(Row::new(vec!["Name", "Type", "Local <-> Remote", "Status"]))
         .block(Block::default().borders(Borders::ALL).title("Tunnels"))
+        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+
+    frame.render_stateful_widget(table, area, table_state);
+}
+
+pub fn draw_profiles(
+    frame: &mut Frame,
+    area: Rect,
+    profiles: &[Profile],
+    table_state: &mut TableState,
+) {
+    let rows = profiles.iter().map(|profile| {
+        let auth = match &profile.auth {
+            AuthMethod::Password { .. } => "password",
+            AuthMethod::PrivateKey { .. } => "private key",
+            AuthMethod::Agent => "agent",
+        };
+        Row::new(vec![
+            Cell::from(profile.name.clone()),
+            Cell::from(format!("{}:{}", profile.host, profile.port)),
+            Cell::from(profile.username.clone()),
+            Cell::from(auth),
+            Cell::from(profile.jump.clone().unwrap_or_else(|| "-".to_string())),
+        ])
+    });
+
+    let widths = [
+        Constraint::Percentage(20),
+        Constraint::Percentage(30),
+        Constraint::Percentage(15),
+        Constraint::Percentage(15),
+        Constraint::Percentage(20),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(Row::new(vec![
+            "Name",
+            "Host:Port",
+            "Username",
+            "Auth",
+            "Jump",
+        ]))
+        .block(Block::default().borders(Borders::ALL).title("Profiles"))
         .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
 
     frame.render_stateful_widget(table, area, table_state);

@@ -50,7 +50,7 @@ fn field_label_value(form: &FormState, field: FormField) -> (&'static str, Strin
         FormField::Profile => (
             "Profile",
             if form.profile_name.is_empty() {
-                "(none — add one in config.toml)".to_string()
+                "(none — add one in the Profiles panel)".to_string()
             } else {
                 form.profile_name.clone()
             },
