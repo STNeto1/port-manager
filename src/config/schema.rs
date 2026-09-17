@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub profiles: Vec<Profile>,
@@ -17,6 +18,7 @@ pub struct Config {
 /// details, the same way an ssh_config `Host` block covers every
 /// `LocalForward` line under it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     pub name: String,
     pub host: String,
@@ -31,6 +33,7 @@ pub struct Profile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TunnelDefinition {
     pub id: Uuid,
     pub name: String,
@@ -56,7 +59,7 @@ pub enum Direction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthMethod {
     Password {
         password: Option<String>,
@@ -69,12 +72,14 @@ pub enum AuthMethod {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostPort {
     pub host: String,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SocketAddrSpec {
     pub bind_addr: String,
     pub port: u16,

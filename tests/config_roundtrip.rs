@@ -16,6 +16,10 @@ fn sample_profile(name: &str, auth: AuthMethod, jump: Option<String>) -> Profile
 }
 
 fn sample_tunnel(direction: Direction, profile: &str) -> TunnelDefinition {
+    let remote = (direction != Direction::Dynamic).then(|| HostPort {
+        host: "10.0.0.5".to_string(),
+        port: 5432,
+    });
     TunnelDefinition {
         id: Uuid::new_v4(),
         name: "example".to_string(),
@@ -25,10 +29,7 @@ fn sample_tunnel(direction: Direction, profile: &str) -> TunnelDefinition {
             bind_addr: "127.0.0.1".to_string(),
             port: 15432,
         },
-        remote: Some(HostPort {
-            host: "10.0.0.5".to_string(),
-            port: 5432,
-        }),
+        remote,
         autostart: false,
         enabled: true,
     }
@@ -150,6 +151,107 @@ fn load_creates_default_config_when_missing() {
     assert!(config.tunnels.is_empty());
     assert!(config.profiles.is_empty());
     assert!(path.exists());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn compact_config_round_trips_with_stable_ids() {
+    let dir = tempfile_dir();
+    let path = dir.join("config.toml");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &path,
+        r#"
+[profiles.worker]
+host = "worker.example.com"
+username = "deploy"
+
+[profiles.worker.local]
+web = "1337 -> localhost:3000"
+postgres = { listen = "0.0.0.0:15432", target = "db.internal:5432", autostart = true }
+
+[profiles.worker.dynamic]
+socks = 1080
+"#,
+    )
+    .unwrap();
+
+    let first = pmanager::config::load(&path).expect("compact config should load");
+    assert_eq!(first.profiles.len(), 1);
+    assert_eq!(first.tunnels.len(), 3);
+    assert!(matches!(first.profiles[0].auth, AuthMethod::Agent));
+    let first_ids: Vec<_> = first.tunnels.iter().map(|t| t.id).collect();
+
+    pmanager::config::save(&path, &first).expect("compact config should save");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("web = \"1337 -> localhost:3000\""));
+    assert!(saved.contains("socks = 1080"));
+    assert!(!saved.contains("[[tunnels]]"));
+
+    let second = pmanager::config::load(&path).expect("saved config should reload");
+    let second_ids: Vec<_> = second.tunnels.iter().map(|t| t.id).collect();
+    assert_eq!(first_ids, second_ids);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn compact_config_rejects_unknown_fields_and_duplicate_tunnel_names() {
+    let dir = tempfile_dir();
+    let path = dir.join("config.toml");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &path,
+        r#"
+[profiles.one]
+host = "one.example.com"
+username = "deploy"
+unknown = true
+"#,
+    )
+    .unwrap();
+    assert!(pmanager::config::load(&path).is_err());
+
+    std::fs::write(
+        &path,
+        r#"
+[profiles.one]
+host = "one.example.com"
+username = "deploy"
+[profiles.one.local]
+web = "8000 -> localhost:80"
+
+[profiles.two]
+host = "two.example.com"
+username = "deploy"
+[profiles.two.local]
+web = "8001 -> localhost:80"
+"#,
+    )
+    .unwrap();
+    let error = format!("{:?}", pmanager::config::load(&path).unwrap_err());
+    assert!(error.contains("duplicate tunnel name"), "{error}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn legacy_config_loads_and_saves_as_compact_toml() {
+    let dir = tempfile_dir();
+    let path = dir.join("config.toml");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = Config {
+        profiles: vec![sample_profile("worker", AuthMethod::Agent, None)],
+        tunnels: vec![sample_tunnel(Direction::Local, "worker")],
+    };
+    std::fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+    let loaded = pmanager::config::load(&path).expect("legacy config should load");
+    pmanager::config::save(&path, &loaded).expect("migration save should work");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("[profiles.worker.local]"));
+    assert!(!saved.contains("[[profiles]]"));
 
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -68,54 +68,50 @@ Both write the currently-running `pmanager` binary's own path into the service d
 
 ## Config file
 
-`~/.config/pmanager/config.toml`, created automatically on first run and safe to hand-edit (`r` in the TUI reloads it). It has two parts: a list of **profiles** (reusable SSH connections — host/port/username/auth, optionally through a jump host) and a list of **tunnels** that each reference one profile by name, the same way an ssh_config `Host` block covers every `LocalForward` line under it. Any number of tunnels can share a profile instead of repeating its connection details.
+`~/.config/pmanager/config.toml` is created automatically and is safe to hand-edit (`r` reloads it). Profiles are named tables, and tunnels are one-line entries under the profile they use:
 
 ```toml
-[[profiles]]
-name = "nixserver"
+[profiles.nixserver]
 host = "192.168.1.50"
-port = 22
 username = "germano"
-[profiles.auth]
-type = "private_key"            # "password" | "private_key" | "agent"
-path = "/Users/me/.ssh/id_ed25519"
-passphrase = ""                  # omit or leave blank if the key isn't encrypted
 
-[[profiles]]
-name = "worker"
-host = "10.233.1.2"
-port = 22
-username = "germano"
-jump = "nixserver"                # reach `worker` through the `nixserver` profile. That profile can itself have a `jump`, chaining any number of hops.
-[profiles.auth]
+[profiles.nixserver.auth]
 type = "private_key"
 path = "/Users/me/.ssh/id_ed25519"
 
-[[tunnels]]
-id = "9d2e7f10-...."          # UUID, assigned automatically — don't reuse across entries
-name = "worker-dev-server"
-direction = "local"            # "local" | "remote" | "dynamic"
-profile = "worker"              # references a [[profiles]] entry by name
-enabled = true
-autostart = false               # start automatically when the daemon launches
+[profiles.worker]
+host = "10.233.1.2"
+username = "germano"
+jump = "nixserver"
 
-[tunnels.local_bind]            # where pmanager listens locally
-bind_addr = "127.0.0.1"
-port = 1337
+[profiles.worker.auth]
+type = "private_key"
+path = "/Users/me/.ssh/id_ed25519"
 
-[tunnels.remote]                # meaning depends on direction — see below
-host = "localhost"
-port = 1337
+[profiles.worker.local]
+web = "1337 -> localhost:1337"
+postgres = "15432 -> db.internal:5432"
+
+[profiles.worker.remote]
+preview = "8080 -> localhost:3000"
+
+[profiles.worker.dynamic]
+socks = 1080
 ```
 
-`[tunnels.remote]`'s meaning depends on `direction`:
-- **local**: the address `profile.host` connects to *on the far side* of the SSH session (classic `ssh -L local_bind:remote`).
-- **remote**: the address the daemon connects to *locally* when the server forwards a connection back (classic `ssh -R remote_bind:this_field`, with `local_bind` acting as the server-side bind address/port).
-- **dynamic**: not used — SOCKS clients supply their own target per-connection.
+Adding, editing, or removing a normal tunnel means changing one line. The left side is its globally unique name. `listen -> target` is used consistently: `local` listens on this machine, while `remote` listens on the SSH server. Dynamic entries only need their local SOCKS port. Listeners default to `127.0.0.1`.
 
-**Auth methods** (set per-profile): `agent` (recommended — talks to `ssh-agent` via `$SSH_AUTH_SOCK`, no secrets in the config file), `private_key` (path + optional passphrase — a plaintext passphrase in `config.toml` is a real risk if the key needs one), and `password` (plaintext password in `config.toml` — avoid unless you understand that tradeoff; the add/edit form doesn't warn on this yet).
+Use an inline table for non-default settings or an explicit bind address:
 
-Profiles can be created, edited, and deleted from the TUI itself — press `p` to switch to the Profiles panel, then `a`/`e`/`d` as usual. A profile's `name` is its identity and can't be changed from an edit form; delete and recreate it to rename. Deleting a profile that's still referenced by a tunnel, or used as another profile's `jump`, is rejected until that reference is removed.
+```toml
+[profiles.worker.local]
+web = { listen = "0.0.0.0:1337", target = "localhost:3000", autostart = true }
+disabled-db = { listen = 15432, target = "db.internal:5432", enabled = false }
+```
+
+SSH port defaults to `22`, and authentication defaults to `agent`. Explicit auth types are `agent`, `private_key` (`path` and optional `passphrase`), and `password` (optional `password`). Passwords and key passphrases are stored as plaintext, so prefer the agent where possible. Jump profiles may themselves use `jump`, but cycles and unknown profile references are rejected.
+
+Profiles can also be managed in the TUI: press `p` to switch panels, then `a`/`e`/`d`. Deleting a profile still referenced by a tunnel or jump is rejected.
 
 ## Host key verification
 
