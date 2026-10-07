@@ -68,7 +68,7 @@ Both write the currently-running `pmanager` binary's own path into the service d
 
 ## Config file
 
-`~/.config/pmanager/config.toml` is created automatically and is safe to hand-edit (`r` reloads it). Profiles are named tables, and tunnels are one-line entries under the profile they use:
+`~/.config/pmanager/config.toml` is created automatically and is safe to hand-edit. The daemon notices saved edits within a couple of seconds and applies only what changed: tunnels you didn't touch keep running with their open connections, an edited tunnel is stopped (start it again to pick up the change), and a removed one is torn down. `r` in the TUI does the same on demand and refreshes the list. Profiles are named tables, and tunnels are one-line entries under the profile they use:
 
 ```toml
 [profiles.nixserver]

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use tokio::sync::Notify;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -15,6 +16,9 @@ use crate::model::{TunnelEvent, TunnelState};
 use crate::ssh;
 
 type CommandReply = oneshot::Sender<Result<(), String>>;
+
+/// How often the config file's mtime is checked for hand edits.
+const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Commands the daemon's connection handlers (and, for `TunnelStateChanged`,
 /// the per-tunnel ssh tasks themselves) send to the single actor task that
@@ -44,8 +48,21 @@ struct TunnelRuntime {
     handle: Option<ssh::TunnelHandle>,
 }
 
+impl TunnelRuntime {
+    fn stopped(def: TunnelDefinition) -> Self {
+        Self {
+            def,
+            state: TunnelState::Stopped,
+            handle: None,
+        }
+    }
+}
+
 pub struct DaemonCore {
     config_path: PathBuf,
+    /// The config file's mtime as of the daemon's last read or write of it,
+    /// so the poll in `run` only reloads on edits made by someone else.
+    config_mtime: Option<SystemTime>,
     profiles: Vec<Profile>,
     tunnels: HashMap<Uuid, TunnelRuntime>,
     events: broadcast::Sender<TunnelEvent>,
@@ -65,6 +82,7 @@ impl DaemonCore {
     ) -> Self {
         let profiles = config.profiles.clone();
         Self {
+            config_mtime: file_mtime(&config_path),
             config_path,
             profiles,
             tunnels: index_by_id(config),
@@ -73,12 +91,75 @@ impl DaemonCore {
         }
     }
 
-    fn persist(&self) -> Result<(), String> {
+    fn persist(&mut self) -> Result<(), String> {
         let config = Config {
             profiles: self.profiles.clone(),
             tunnels: self.tunnels.values().map(|t| t.def.clone()).collect(),
         };
-        config::save(&self.config_path, &config).map_err(|err| err.to_string())
+        config::save(&self.config_path, &config).map_err(|err| err.to_string())?;
+        self.config_mtime = file_mtime(&self.config_path);
+        Ok(())
+    }
+
+    /// Re-reads the config file and applies it as a diff: a tunnel whose
+    /// definition and resolved connection are unchanged keeps its runtime
+    /// (and so its open connections); a changed one is stopped, the same as
+    /// an edit through `UpdateTunnel`; a removed one is torn down.
+    fn reload(&mut self) -> Result<(), String> {
+        // Recorded before reading, so an edit landing mid-load still differs
+        // from it and is picked up by the next poll.
+        self.config_mtime = file_mtime(&self.config_path);
+        let config = config::load(&self.config_path).map_err(|err| err.to_string())?;
+
+        // Matched by name rather than id: a tunnel added over IPC carries a
+        // client-generated id, while the same tunnel read back from the file
+        // gets its derived one. The existing id is kept so clients' ids and
+        // in-flight ssh tasks' events stay valid.
+        let mut previous: HashMap<String, TunnelRuntime> = self
+            .tunnels
+            .drain()
+            .map(|(_, runtime)| (runtime.def.name.clone(), runtime))
+            .collect();
+        for mut def in config.tunnels {
+            let runtime = match previous.remove(&def.name) {
+                Some(old) => {
+                    def.id = old.def.id;
+                    let same_connection =
+                        resolve::resolve_connection(&self.profiles, &old.def.profile).ok()
+                            == resolve::resolve_connection(&config.profiles, &def.profile).ok();
+                    if old.def == def && same_connection {
+                        old
+                    } else {
+                        TunnelRuntime::stopped(def)
+                    }
+                }
+                None => TunnelRuntime::stopped(def),
+            };
+            self.tunnels.insert(runtime.def.id, runtime);
+        }
+        self.profiles = config.profiles;
+        Ok(())
+    }
+
+    fn reload_if_changed(&mut self) {
+        // A missing file is skipped rather than reloaded: some editors save
+        // by moving the original aside first, and `config::load` would
+        // answer that gap by writing an empty default config over the edit.
+        let Some(mtime) = file_mtime(&self.config_path) else {
+            return;
+        };
+        if self.config_mtime == Some(mtime) {
+            return;
+        }
+        // Wait for the file to sit untouched for one interval so a save
+        // still in progress isn't read half-written.
+        if mtime.elapsed().is_ok_and(|age| age < CONFIG_POLL_INTERVAL) {
+            return;
+        }
+        match self.reload() {
+            Ok(()) => info!("config file changed on disk, reloaded"),
+            Err(err) => warn!(%err, "config file changed on disk but failed to reload"),
+        }
     }
 
     fn snapshot_all(&self) -> Vec<TunnelSnapshot> {
@@ -206,6 +287,12 @@ impl DaemonCore {
     }
 }
 
+fn file_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
 fn index_by_id(config: Config) -> HashMap<Uuid, TunnelRuntime> {
     config
         .tunnels
@@ -228,7 +315,19 @@ pub async fn run(
     mut core: DaemonCore,
     shutdown: Arc<Notify>,
 ) {
-    while let Some(cmd) = cmd_rx.recv().await {
+    let mut config_poll = tokio::time::interval(CONFIG_POLL_INTERVAL);
+    config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        let cmd = tokio::select! {
+            cmd = cmd_rx.recv() => match cmd {
+                Some(cmd) => cmd,
+                None => break,
+            },
+            _ = config_poll.tick() => {
+                core.reload_if_changed();
+                continue;
+            }
+        };
         match cmd {
             DaemonCommand::ListTunnels(reply) => {
                 let _ = reply.send(core.snapshot_all());
@@ -290,21 +389,14 @@ pub async fn run(
             DaemonCommand::RemoveProfile(name, reply) => {
                 let _ = reply.send(core.remove_profile(&name));
             }
-            DaemonCommand::ReloadConfig(reply) => match config::load(&core.config_path) {
-                Ok(config) => {
-                    for id in core.tunnels.keys().copied().collect::<Vec<_>>() {
-                        core.stop_running(id);
-                    }
-                    core.profiles = config.profiles.clone();
-                    core.tunnels = index_by_id(config);
-                    info!("config reloaded from disk");
-                    let _ = reply.send(Ok(()));
+            DaemonCommand::ReloadConfig(reply) => {
+                let result = core.reload();
+                match &result {
+                    Ok(()) => info!("config reloaded from disk"),
+                    Err(err) => warn!(%err, "failed to reload config"),
                 }
-                Err(err) => {
-                    warn!(?err, "failed to reload config");
-                    let _ = reply.send(Err(err.to_string()));
-                }
-            },
+                let _ = reply.send(result);
+            }
             DaemonCommand::TunnelStateChanged(id, state) => {
                 core.set_state(id, state);
             }
@@ -314,5 +406,80 @@ pub async fn run(
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONFIG: &str = r#"
+[profiles.box]
+host = "10.0.0.1"
+username = "deploy"
+
+[profiles.box.local]
+db = "5432 -> localhost:5432"
+web = "8080 -> localhost:80"
+"#;
+
+    fn state_of(core: &DaemonCore, name: &str) -> TunnelState {
+        let runtime = core.tunnels.values().find(|t| t.def.name == name);
+        runtime.expect("tunnel should exist").state.clone()
+    }
+
+    #[tokio::test]
+    async fn reload_keeps_unchanged_tunnels_and_stops_changed_ones() {
+        let dir = std::env::temp_dir().join(format!("pmanager-core-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, CONFIG).unwrap();
+
+        let (events, _events_rx) = broadcast::channel(16);
+        let (cmd_tx, _cmd_rx) = mpsc::channel(16);
+        let mut core = DaemonCore::new(path.clone(), config::load(&path).unwrap(), events, cmd_tx);
+        let ids: Vec<Uuid> = core.tunnels.keys().copied().collect();
+        for runtime in core.tunnels.values_mut() {
+            runtime.state = TunnelState::Connected {
+                active_connections: 1,
+            };
+        }
+
+        // Unrelated additions leave both running tunnels alone.
+        let added = format!("{CONFIG}cache = \"6379 -> localhost:6379\"\n");
+        std::fs::write(&path, &added).unwrap();
+        core.reload().unwrap();
+        assert_eq!(core.tunnels.len(), 3);
+        assert!(matches!(
+            state_of(&core, "db"),
+            TunnelState::Connected { .. }
+        ));
+        assert!(matches!(
+            state_of(&core, "web"),
+            TunnelState::Connected { .. }
+        ));
+        assert!(matches!(state_of(&core, "cache"), TunnelState::Stopped));
+
+        // Editing one tunnel stops only that one, and ids stay stable.
+        std::fs::write(&path, added.replace("8080", "8081")).unwrap();
+        core.reload().unwrap();
+        assert!(matches!(
+            state_of(&core, "db"),
+            TunnelState::Connected { .. }
+        ));
+        assert!(matches!(state_of(&core, "web"), TunnelState::Stopped));
+        assert!(ids.iter().all(|id| core.tunnels.contains_key(id)));
+
+        // A profile change affects every tunnel connecting through it.
+        std::fs::write(&path, added.replace("10.0.0.1", "10.0.0.2")).unwrap();
+        core.reload().unwrap();
+        assert!(matches!(state_of(&core, "db"), TunnelState::Stopped));
+
+        // A removed tunnel is dropped.
+        std::fs::write(&path, CONFIG).unwrap();
+        core.reload().unwrap();
+        assert_eq!(core.tunnels.len(), 2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -5,6 +5,7 @@ use super::schema::{AuthMethod, Profile};
 /// `ssh::client` actually needs to open a session — resolved once at start
 /// time rather than threading profile lookups through the connect/auth/jump
 /// code.
+#[derive(PartialEq, Eq)]
 pub struct ResolvedConnection {
     pub host: String,
     pub port: u16,
@@ -15,6 +16,7 @@ pub struct ResolvedConnection {
     pub jumps: Vec<ResolvedJump>,
 }
 
+#[derive(PartialEq, Eq)]
 pub struct ResolvedJump {
     pub host: String,
     pub port: u16,
